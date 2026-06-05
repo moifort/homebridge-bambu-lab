@@ -2,7 +2,7 @@
   "name": "@moifort/homebridge-bambu-lab",
   "displayName": "Homebridge Bambu Plugin",
   "type": "module",
-  "version": "1.0.2",
+  "version": "1.1.0",
   "private": false,
   "description": "Homebridge plugin to control one or more Bambu Lab printers over local MQTT.",
   "author": "Thibaut Mottet",
