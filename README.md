@@ -21,7 +21,7 @@ This project started when I was too lazy to open the Bambu app to turn off the c
 ## Features
 
 - Supports multiple Bambu printers from a single Homebridge platform instance.
-- Uses the Homebridge settings UI with a custom multi-printer configuration screen.
+- Configurable from the Homebridge settings UI, with multi-printer support.
 - Lets you assign a custom name and selected model to each printer.
 - Subscribes to `device/<serial>/report` for printer state updates.
 - Exposes HomeKit accessories per printer:

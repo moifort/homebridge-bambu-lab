@@ -2,7 +2,6 @@
   "pluginAlias": "Homebridge Bambu Plugin",
   "pluginType": "platform",
   "singular": true,
-  "customUi": true,
   "strictValidation": false,
   "schema": {
     "type": "object",
