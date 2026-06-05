@@ -1,12 +1,12 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/trinityhades/homebridge-bambu-lab/refs/heads/main/public/homebridge-bambu-logo.png" width="600">
+  <img src="https://raw.githubusercontent.com/moifort/homebridge-bambu-lab/refs/heads/main/public/homebridge-bambu-logo.png" width="600">
 </p>
 
 <span align="center">
 
-[![npm](https://img.shields.io/npm/v/homebridge-bambu-lab.svg)](https://www.npmjs.com/package/homebridge-bambu-lab)
-[![npm](https://img.shields.io/npm/dt/homebridge-bambu-lab.svg)](https://www.npmjs.com/package/homebridge-bambu-lab)
-[![License](https://img.shields.io/npm/l/homebridge-bambu-lab.svg)](https://github.com/trinityhades/homebridge-bambu-lab/blob/main/LICENSE)
+[![npm](https://img.shields.io/npm/v/%40moifort%2Fhomebridge-bambu-lab.svg)](https://www.npmjs.com/package/@moifort/homebridge-bambu-lab)
+[![npm](https://img.shields.io/npm/dt/%40moifort%2Fhomebridge-bambu-lab.svg)](https://www.npmjs.com/package/@moifort/homebridge-bambu-lab)
+[![License](https://img.shields.io/npm/l/%40moifort%2Fhomebridge-bambu-lab.svg)](https://github.com/moifort/homebridge-bambu-lab/blob/main/LICENSE)
 [![verified-by-homebridge](https://img.shields.io/badge/homebridge-verified-blueviolet?color=%23491F59&style=flat)](https://github.com/homebridge/homebridge/wiki/Verified-Plugins)
 [![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee%20(Rent)-Donate-red.svg)](https://www.buymeacoffee.com/trinityhades)
 
@@ -25,12 +25,12 @@ This project started when I was too lazy to open the Bambu app to turn off the c
 - Lets you assign a custom name and selected model to each printer.
 - Subscribes to `device/<serial>/report` for printer state updates.
 - Exposes HomeKit accessories per printer:
-  - **Lightbulb**: chamber light on/off.
-  - **Switch**: pause/resume active print.
+  - **Lightbulb**: chamber light on/off (hide it with `enableChamberLight: false`).
+  - **Switch**: pause/resume active print (hide it with `enablePrintSwitch: false`).
   - **Optional Fan**: print speed override slider.
   - **Optional Camera**: HomeKit camera accessory for the printer stream.
 - Publishes commands to `device/<serial>/request`.
-- Handles MQTT disconnects and reconnects automatically per printer.
+- Handles MQTT disconnects and reconnects automatically per printer, with exponential backoff (5s up to 5 minutes) and warning-level logs only — powering the printer off no longer floods the Homebridge log with errors.
 
 ## Configuration
 
@@ -53,6 +53,8 @@ Manual `config.json` example:
       "mqttUsername": "bblp",
       "rejectUnauthorized": false,
       "enableSpeedControl": true,
+      "enablePrintSwitch": true,
+      "enableChamberLight": true,
       "enableCamera": true,
       "cameraName": "Office Printer Camera",
       "cameraRtspUrl": "rtsps://bblp:12345678@192.168.1.50:322/streaming/live/1",

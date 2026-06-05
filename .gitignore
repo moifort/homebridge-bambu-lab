@@ -127,3 +127,6 @@ dist
 
 # GitShift personal account configuration
 **/github-accounts.json
+
+# Claude Code session files
+.claude/
