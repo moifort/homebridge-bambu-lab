@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-06-05
+
+### Added
+
+- X2D printer model option.
+
+### Removed
+
+- Removed the custom configuration UI in favor of the standard schema-generated Homebridge UI form. The custom UI lost input focus on every keystroke and was missing the new accessory visibility toggles.
+
 ## [1.1.0] - 2026-06-05
 
 ### Added
