@@ -1,18 +1,19 @@
 {
-  "name": "homebridge-bambu-lab",
+  "name": "@moifort/homebridge-bambu-lab",
   "displayName": "Homebridge Bambu Plugin",
   "type": "module",
   "version": "1.0.2",
+  "private": false,
   "description": "Homebridge plugin to control one or more Bambu Lab printers over local MQTT.",
-  "author": "Homebridge Community",
+  "author": "Thibaut Mottet",
   "license": "Apache-2.0",
-  "homepage": "https://github.com/trinityhades/homebridge-bambu-lab#readme",
+  "homepage": "https://github.com/moifort/homebridge-bambu-lab#readme",
   "repository": {
     "type": "git",
-    "url": "https://github.com/trinityhades/homebridge-bambu-lab.git"
+    "url": "git+https://github.com/moifort/homebridge-bambu-lab.git"
   },
   "bugs": {
-    "url": "https://github.com/trinityhades/homebridge-bambu-lab/issues"
+    "url": "https://github.com/moifort/homebridge-bambu-lab/issues"
   },
   "keywords": [
     "homebridge-plugin",
@@ -30,6 +31,7 @@
     "build": "rimraf ./dist && tsc",
     "lint": "eslint . --max-warnings=0",
     "prepublishOnly": "npm run lint && npm run build",
+    "release": "npm version patch && git push --follow-tags",
     "dev": "npm run build && npm run lint && sudo hb-service restart",
     "watch": "npm run build && npm link && nodemon"
   },

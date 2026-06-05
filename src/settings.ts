@@ -6,4 +6,4 @@ export const PLATFORM_NAME = 'Homebridge Bambu Plugin';
 /**
  * This must match the name of your plugin as defined the package.json `name` property
  */
-export const PLUGIN_NAME = 'homebridge-bambu-lab';
+export const PLUGIN_NAME = '@moifort/homebridge-bambu-lab';
