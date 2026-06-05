@@ -91,6 +91,8 @@ export class BambuCameraAccessory implements CameraStreamingDelegate, CameraReco
   private motionTriggerUntil = 0;
   private motionResetTimer?: NodeJS.Timeout;
 
+  private printerOnline = false;
+
   constructor(
     private readonly platform: BambuPlatform,
     private readonly accessory: PlatformAccessory,
@@ -199,25 +201,46 @@ export class BambuCameraAccessory implements CameraStreamingDelegate, CameraReco
       this.startRecordingMonitor();
     }
 
+    this.printerOnline = this.platform.isPrinterOnline(this.context.printerId);
     this.updateUnifiedPipelineState();
+  }
+
+  getPrinterId(): string {
+    return this.context.printerId;
+  }
+
+  setPrinterOnline(online: boolean): void {
+    if (this.printerOnline === online) {
+      return;
+    }
+
+    this.printerOnline = online;
+
+    if (online) {
+      this.platform.log.info(`${this.context.displayName}: printer back online, resuming camera pipeline.`);
+      this.updateUnifiedPipelineState();
+    } else {
+      this.platform.log.info(`${this.context.displayName}: printer offline, pausing camera pipeline.`);
+      this.stopUnifiedPipeline();
+    }
   }
 
   handleSnapshotRequest(request: SnapshotRequest, callback: SnapshotRequestCallback): void {
     const width = request.width > 0 ? request.width : 1280;
     const height = request.height > 0 ? request.height : 720;
 
-    this.platform.log.info(`Snapshot request ${width}x${height}`);
+    this.platform.log.debug(`Snapshot request ${width}x${height}`);
 
     if (existsSync(this.snapshotTmpPath)) {
       try {
         const ageMs = Date.now() - statSync(this.snapshotTmpPath).mtimeMs;
-        if (ageMs < SNAPSHOT_MAX_AGE_MS) {
-          if (ageMs >= SNAPSHOT_STALE_WARN_MS) {
+        if (ageMs < SNAPSHOT_MAX_AGE_MS || !this.printerOnline) {
+          if (this.printerOnline && ageMs >= SNAPSHOT_STALE_WARN_MS) {
             this.platform.log.warn(`Snapshot cache is stale (${Math.round(ageMs / 1000)}s old); returning it anyway.`);
           }
 
           const data = readFileSync(this.snapshotTmpPath);
-          this.platform.log.info(`Snapshot from cache (${data.length} bytes, ${Math.round(ageMs / 1000)}s old)`);
+          this.platform.log.debug(`Snapshot from cache (${data.length} bytes, ${Math.round(ageMs / 1000)}s old)`);
           callback(undefined, data);
           return;
         }
@@ -225,6 +248,12 @@ export class BambuCameraAccessory implements CameraStreamingDelegate, CameraReco
         const message = error instanceof Error ? error.message : String(error);
         this.platform.log.debug(`Unable to reuse cached snapshot: ${message}`);
       }
+    }
+
+    if (!this.printerOnline) {
+      this.platform.log.debug('Printer is offline; skipping snapshot capture.');
+      callback(new Error('Printer is offline.'));
+      return;
     }
 
     const pipelineRunning = this.unifiedProcess != null;
@@ -256,7 +285,7 @@ export class BambuCameraAccessory implements CameraStreamingDelegate, CameraReco
       'pipe:1',
     ];
 
-    this.platform.log.info(`Snapshot ffmpeg args: ${args.join(' ')}`);
+    this.platform.log.debug(`Snapshot ffmpeg args: ${args.join(' ')}`);
 
     const ffmpegProcess = spawn(ffmpegPath, args, { env: process.env });
 
@@ -282,19 +311,19 @@ export class BambuCameraAccessory implements CameraStreamingDelegate, CameraReco
       clearTimeout(timeout);
 
       if (code === 0 && chunks.length > 0) {
-        this.platform.log.info(`Snapshot success ${width}x${height} (${Buffer.concat(chunks).length} bytes)`);
+        this.platform.log.debug(`Snapshot success ${width}x${height} (${Buffer.concat(chunks).length} bytes)`);
         callback(undefined, Buffer.concat(chunks));
         return;
       }
 
       const details = stderr.trim();
       if (timedOut) {
-        this.platform.log.error(`Snapshot timed out after ${snapshotTimeoutMs}ms (${width}x${height})`);
+        this.platform.log.warn(`Snapshot timed out after ${snapshotTimeoutMs}ms (${width}x${height})`);
       } else if (details.length > 0) {
-        this.platform.log.error(`Snapshot ffmpeg failed code=${code}: ${details}`);
+        this.platform.log.warn(`Snapshot ffmpeg failed code=${code}: ${details}`);
         this.logDefaultCameraEndpointHint(details);
       } else {
-        this.platform.log.error(`Snapshot ffmpeg failed code=${code}`);
+        this.platform.log.warn(`Snapshot ffmpeg failed code=${code}`);
       }
 
       callback(new Error(`Snapshot ffmpeg exited code=${code}. ${stderr.trim()}`));
@@ -303,7 +332,7 @@ export class BambuCameraAccessory implements CameraStreamingDelegate, CameraReco
     ffmpegProcess.on('error', (error) => {
       completed = true;
       clearTimeout(timeout);
-      this.platform.log.error(`Snapshot ffmpeg spawn error: ${error.message}`);
+      this.platform.log.warn(`Snapshot ffmpeg spawn error: ${error.message}`);
       callback(error);
     });
   }
@@ -418,7 +447,7 @@ export class BambuCameraAccessory implements CameraStreamingDelegate, CameraReco
       });
 
       ffmpegProcess.on('error', (error) => {
-        this.platform.log.error(`Camera ffmpeg error (${sessionId}): ${error.message}`);
+        this.platform.log.warn(`Camera ffmpeg error (${sessionId}): ${error.message}`);
       });
 
       ffmpegProcess.on('close', (code, signal) => {
@@ -429,10 +458,10 @@ export class BambuCameraAccessory implements CameraStreamingDelegate, CameraReco
         if (code && code !== 0 && !expectedStop) {
           const details = stderrBuffer.trim();
           if (details.length > 0) {
-            this.platform.log.error(`Camera ffmpeg failed (${sessionId}) code=${code}: ${details}`);
+            this.platform.log.warn(`Camera ffmpeg failed (${sessionId}) code=${code}: ${details}`);
             this.logDefaultCameraEndpointHint(details);
           } else {
-            this.platform.log.error(`Camera ffmpeg failed (${sessionId}) code=${code}`);
+            this.platform.log.warn(`Camera ffmpeg failed (${sessionId}) code=${code}`);
           }
         }
 
@@ -602,6 +631,11 @@ export class BambuCameraAccessory implements CameraStreamingDelegate, CameraReco
 
   private startUnifiedPipeline(hasHksv: boolean, hasMotion: boolean): void {
     if (this.unifiedProcess || this.unifiedRestartTimer) {
+      return;
+    }
+
+    if (!this.printerOnline) {
+      this.platform.log.debug('Printer is offline; unified pipeline will start once it reconnects.');
       return;
     }
 
@@ -817,10 +851,10 @@ export class BambuCameraAccessory implements CameraStreamingDelegate, CameraReco
       if (code && code !== 0 && !expectedStop) {
         const details = stderrBuffer.trim();
         if (details.length > 0) {
-          this.platform.log.error(`Unified pipeline failed code=${code}: ${details}`);
+          this.platform.log.warn(`Unified pipeline failed code=${code}: ${details}`);
           this.logDefaultCameraEndpointHint(details);
         } else {
-          this.platform.log.error(`Unified pipeline failed code=${code}`);
+          this.platform.log.warn(`Unified pipeline failed code=${code}`);
         }
       }
 
@@ -836,7 +870,7 @@ export class BambuCameraAccessory implements CameraStreamingDelegate, CameraReco
     });
 
     processRef.on('error', (error: Error) => {
-      this.platform.log.error(`Unified pipeline spawn error: ${error.message}`);
+      this.platform.log.warn(`Unified pipeline spawn error: ${error.message}`);
     });
   }
 

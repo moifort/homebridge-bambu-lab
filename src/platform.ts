@@ -102,6 +102,7 @@ export class BambuPlatform implements DynamicPlatformPlugin {
   public readonly accessories: Map<string, PlatformAccessory> = new Map();
 
   private readonly accessoryHandlers: Map<string, BambuPrinterAccessory> = new Map();
+  private readonly cameraHandlers: Map<string, BambuCameraAccessory> = new Map();
   private readonly configTyped: BambuPlatformConfig;
   private readonly printers: Map<string, ManagedPrinter> = new Map();
   private readonly storagePath: string;
@@ -140,10 +141,15 @@ export class BambuPlatform implements DynamicPlatformPlugin {
 
   unregisterAccessoryHandler(accessoryUUID: string) {
     this.accessoryHandlers.delete(accessoryUUID);
+    this.cameraHandlers.delete(accessoryUUID);
   }
 
   getState(printerId: string): PrinterState {
     return { ...(this.printers.get(printerId)?.state ?? createDefaultState()) };
+  }
+
+  isPrinterOnline(printerId: string): boolean {
+    return this.printers.get(printerId)?.state.online ?? false;
   }
 
   getPrinterModel(printerId: string): string {
@@ -671,11 +677,19 @@ export class BambuPlatform implements DynamicPlatformPlugin {
         handler.syncState(this.getState(printerId));
       }
     }
+
+    for (const handler of this.cameraHandlers.values()) {
+      if (handler.getPrinterId() === printerId) {
+        handler.setPrinterOnline(this.getState(printerId).online);
+      }
+    }
   }
 
   private createAccessoryHandler(kind: AccessoryKind, accessory: PlatformAccessory) {
     if (kind === 'camera') {
-      return new BambuCameraAccessory(this, accessory);
+      const handler = new BambuCameraAccessory(this, accessory);
+      this.cameraHandlers.set(accessory.UUID, handler);
+      return handler;
     }
 
     return new BambuPrinterAccessory(this, accessory);
