@@ -91,6 +91,18 @@
               "type": "boolean",
               "default": false
             },
+            "enablePrintSwitch": {
+              "title": "Enable Print Switch",
+              "description": "Adds a HomeKit switch accessory showing the active print. Disable to hide it from HomeKit.",
+              "type": "boolean",
+              "default": true
+            },
+            "enableChamberLight": {
+              "title": "Enable Chamber Light Control",
+              "description": "Adds a HomeKit lightbulb accessory to toggle the chamber light. Disable to hide it from HomeKit.",
+              "type": "boolean",
+              "default": true
+            },
             "enableCamera": {
               "title": "Enable Camera Accessory",
               "description": "Adds a HomeKit camera accessory. Enable this only when the printer has a reachable LAN camera stream, or provide a custom camera URL.",

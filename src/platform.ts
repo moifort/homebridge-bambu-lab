@@ -28,6 +28,8 @@ export interface BambuPrinterConfig {
   mqttUsername?: string;
   rejectUnauthorized?: boolean;
   enableSpeedControl?: boolean;
+  enablePrintSwitch?: boolean;
+  enableChamberLight?: boolean;
   enableCamera?: boolean;
   cameraRtspUrl?: string;
   cameraName?: string;
@@ -68,6 +70,9 @@ interface ManagedPrinter {
   mqttClient?: MqttClient;
   requestTopic: string;
   reportTopic: string;
+  reconnectDelayMs: number;
+  reconnectTimer?: NodeJS.Timeout;
+  stopped: boolean;
 }
 
 const DEFAULT_PRINTER_NAME = 'Bambu Printer';
@@ -76,6 +81,9 @@ const DEFAULT_MQTT_PORT = 8883;
 const DEFAULT_MQTT_USERNAME = 'bblp';
 const DEFAULT_CAMERA_RTSP_PORT = 322;
 const DEFAULT_CAMERA_RTSP_PATH = '/streaming/live/1';
+const MQTT_RECONNECT_INITIAL_MS = 5000;
+const MQTT_RECONNECT_MAX_MS = 5 * 60 * 1000;
+const MQTT_RECONNECT_FACTOR = 2;
 
 function createDefaultState(): PrinterState {
   return {
@@ -282,24 +290,29 @@ export class BambuPlatform implements DynamicPlatformPlugin {
     for (const printer of this.printers.values()) {
       const printerId = printer.config.serialNumber;
       const baseName = printer.config.name;
-      const devices: AccessoryDeviceContext[] = [
-        {
+      const devices: AccessoryDeviceContext[] = [];
+
+      if (printer.config.enableChamberLight !== false) {
+        devices.push({
           printerId,
           serialNumber: printer.config.serialNumber,
           model: printer.config.model,
           uniqueId: `${printer.config.serialNumber}-light`,
           displayName: `${baseName} Chamber Light`,
           kind: 'light',
-        },
-        {
+        });
+      }
+
+      if (printer.config.enablePrintSwitch !== false) {
+        devices.push({
           printerId,
           serialNumber: printer.config.serialNumber,
           model: printer.config.model,
           uniqueId: `${printer.config.serialNumber}-print-control`,
           displayName: `${baseName} Print`,
           kind: 'printControl',
-        },
-      ];
+        });
+      }
 
       if (printer.config.enableSpeedControl) {
         devices.push({
@@ -386,6 +399,8 @@ export class BambuPlatform implements DynamicPlatformPlugin {
         state: createDefaultState(),
         requestTopic: `device/${printer.serialNumber}/request`,
         reportTopic: `device/${printer.serialNumber}/report`,
+        reconnectDelayMs: MQTT_RECONNECT_INITIAL_MS,
+        stopped: false,
       });
     }
   }
@@ -415,23 +430,31 @@ export class BambuPlatform implements DynamicPlatformPlugin {
 
   private shutdown() {
     for (const printer of this.printers.values()) {
-      try {
-        printer.mqttClient?.end(true);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        this.log.warn(`Error while closing MQTT client for ${printer.config.name}: ${message}`);
+      printer.stopped = true;
+
+      if (printer.reconnectTimer) {
+        clearTimeout(printer.reconnectTimer);
+        printer.reconnectTimer = undefined;
       }
+
+      this.teardownMqttClient(printer);
     }
   }
 
   private connectMqtt(printerId: string) {
     const printer = this.getRequiredPrinter(printerId);
+    if (printer.stopped) {
+      return;
+    }
+
+    this.teardownMqttClient(printer);
 
     const url = `mqtts://${printer.config.ipAddress}:${printer.config.mqttPort ?? DEFAULT_MQTT_PORT}`;
     const options: IClientOptions = {
       username: printer.config.mqttUsername ?? DEFAULT_MQTT_USERNAME,
       password: printer.config.lanAccessCode,
-      reconnectPeriod: 5000,
+      reconnectPeriod: 0,
+      connectTimeout: 30000,
       keepalive: 30,
       rejectUnauthorized: printer.config.rejectUnauthorized ?? false,
       clientId: `homebridge-bambu-lab-${printer.config.serialNumber.slice(-6)}-${Math.floor(Math.random() * 10000)}`,
@@ -439,14 +462,16 @@ export class BambuPlatform implements DynamicPlatformPlugin {
 
     this.log.info(`Connecting to ${printer.config.name} MQTT broker at ${url}`);
 
-    printer.mqttClient = mqtt.connect(url, options);
+    const client = mqtt.connect(url, options);
+    printer.mqttClient = client;
 
-    printer.mqttClient.on('connect', () => {
+    client.on('connect', () => {
       this.log.info(`MQTT connected for ${printer.config.name}`);
+      printer.reconnectDelayMs = MQTT_RECONNECT_INITIAL_MS;
       printer.state.online = true;
       this.syncAccessories(printerId);
 
-      printer.mqttClient?.subscribe(printer.reportTopic, { qos: 0 }, (err) => {
+      client.subscribe(printer.reportTopic, { qos: 0 }, (err) => {
         if (err) {
           this.log.error(`Failed to subscribe to ${printer.reportTopic}: ${err.message}`);
           return;
@@ -466,7 +491,7 @@ export class BambuPlatform implements DynamicPlatformPlugin {
       });
     });
 
-    printer.mqttClient.on('message', (topic, payload) => {
+    client.on('message', (topic, payload) => {
       if (topic !== printer.reportTopic) {
         return;
       }
@@ -474,27 +499,62 @@ export class BambuPlatform implements DynamicPlatformPlugin {
       this.handleReportMessage(printerId, payload.toString());
     });
 
-    printer.mqttClient.on('reconnect', () => {
-      this.log.warn(`MQTT disconnected for ${printer.config.name}, attempting reconnect...`);
+    client.on('close', () => {
+      printer.state.online = false;
+      this.syncAccessories(printerId);
+      this.scheduleReconnect(printerId);
+    });
+
+    client.on('offline', () => {
       printer.state.online = false;
       this.syncAccessories(printerId);
     });
 
-    printer.mqttClient.on('close', () => {
-      this.log.warn(`MQTT connection closed for ${printer.config.name}`);
-      printer.state.online = false;
-      this.syncAccessories(printerId);
+    client.on('error', (error) => {
+      this.log.warn(`MQTT connection issue for ${printer.config.name}: ${error.message}`);
     });
+  }
 
-    printer.mqttClient.on('offline', () => {
-      this.log.warn(`MQTT client is offline for ${printer.config.name}`);
-      printer.state.online = false;
-      this.syncAccessories(printerId);
-    });
+  private scheduleReconnect(printerId: string) {
+    const printer = this.getRequiredPrinter(printerId);
+    if (printer.stopped || printer.reconnectTimer) {
+      return;
+    }
 
-    printer.mqttClient.on('error', (error) => {
-      this.log.error(`MQTT error for ${printer.config.name}: ${error.message}`);
-    });
+    const delay = printer.reconnectDelayMs;
+    this.log.warn(`MQTT disconnected for ${printer.config.name}. Reconnecting in ${Math.round(delay / 1000)}s.`);
+
+    printer.reconnectTimer = setTimeout(() => {
+      printer.reconnectTimer = undefined;
+      printer.reconnectDelayMs = Math.min(delay * MQTT_RECONNECT_FACTOR, MQTT_RECONNECT_MAX_MS);
+
+      try {
+        this.connectMqtt(printerId);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        this.log.warn(`MQTT reconnect failed for ${printer.config.name}: ${message}`);
+        this.scheduleReconnect(printerId);
+      }
+    }, delay);
+
+    printer.reconnectTimer.unref?.();
+  }
+
+  private teardownMqttClient(printer: ManagedPrinter) {
+    const client = printer.mqttClient;
+    if (!client) {
+      return;
+    }
+
+    printer.mqttClient = undefined;
+
+    try {
+      client.removeAllListeners();
+      client.end(true);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.log.warn(`Error while closing MQTT client for ${printer.config.name}: ${message}`);
+    }
   }
 
   private async publishCommand(printerId: string, payload: Record<string, unknown>): Promise<void> {
@@ -668,6 +728,8 @@ export class BambuPlatform implements DynamicPlatformPlugin {
         cameraName: this.normalizeString(printer.cameraName),
         ffmpegPath: this.normalizeString(printer.ffmpegPath),
         enableCamera: this.shouldEnableCamera(printer),
+        enablePrintSwitch: printer.enablePrintSwitch !== false,
+        enableChamberLight: printer.enableChamberLight !== false,
       });
     });
 
@@ -692,6 +754,8 @@ export class BambuPlatform implements DynamicPlatformPlugin {
         mqttUsername: this.configTyped.mqttUsername,
         rejectUnauthorized: this.configTyped.rejectUnauthorized,
         enableSpeedControl: this.configTyped.enableSpeedControl,
+        enablePrintSwitch: this.configTyped.enablePrintSwitch,
+        enableChamberLight: this.configTyped.enableChamberLight,
         enableCamera: this.configTyped.enableCamera,
         cameraRtspUrl: this.configTyped.cameraRtspUrl,
         cameraName: this.configTyped.cameraName,
