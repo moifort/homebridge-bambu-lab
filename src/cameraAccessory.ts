@@ -217,10 +217,10 @@ export class BambuCameraAccessory implements CameraStreamingDelegate, CameraReco
     this.printerOnline = online;
 
     if (online) {
-      this.platform.log.info(`${this.context.displayName}: printer back online, resuming camera pipeline.`);
+      this.platform.log.debug(`${this.context.displayName}: printer back online, resuming camera pipeline.`);
       this.updateUnifiedPipelineState();
     } else {
-      this.platform.log.info(`${this.context.displayName}: printer offline, pausing camera pipeline.`);
+      this.platform.log.debug(`${this.context.displayName}: printer offline, pausing camera pipeline.`);
       this.stopUnifiedPipeline();
     }
   }

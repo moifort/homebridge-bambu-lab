@@ -466,7 +466,7 @@ export class BambuPlatform implements DynamicPlatformPlugin {
       clientId: `homebridge-bambu-lab-${printer.config.serialNumber.slice(-6)}-${Math.floor(Math.random() * 10000)}`,
     };
 
-    this.log.info(`Connecting to ${printer.config.name} MQTT broker at ${url}`);
+    this.log.debug(`Connecting to ${printer.config.name} MQTT broker at ${url}`);
 
     const client = mqtt.connect(url, options);
     printer.mqttClient = client;
@@ -483,7 +483,7 @@ export class BambuPlatform implements DynamicPlatformPlugin {
           return;
         }
 
-        this.log.info(`Subscribed to ${printer.reportTopic}`);
+        this.log.debug(`Subscribed to ${printer.reportTopic}`);
 
         void this.publishCommand(printerId, {
           pushing: {
@@ -506,6 +506,9 @@ export class BambuPlatform implements DynamicPlatformPlugin {
     });
 
     client.on('close', () => {
+      if (printer.state.online) {
+        this.log.info(`MQTT disconnected for ${printer.config.name}`);
+      }
       printer.state.online = false;
       this.syncAccessories(printerId);
       this.scheduleReconnect(printerId);
@@ -517,7 +520,7 @@ export class BambuPlatform implements DynamicPlatformPlugin {
     });
 
     client.on('error', (error) => {
-      this.log.warn(`MQTT connection issue for ${printer.config.name}: ${error.message}`);
+      this.log.debug(`MQTT connection issue for ${printer.config.name}: ${error.message}`);
     });
   }
 
@@ -528,7 +531,7 @@ export class BambuPlatform implements DynamicPlatformPlugin {
     }
 
     const delay = printer.reconnectDelayMs;
-    this.log.warn(`MQTT disconnected for ${printer.config.name}. Reconnecting in ${Math.round(delay / 1000)}s.`);
+    this.log.debug(`Reconnecting to ${printer.config.name} in ${Math.round(delay / 1000)}s.`);
 
     printer.reconnectTimer = setTimeout(() => {
       printer.reconnectTimer = undefined;
@@ -538,7 +541,7 @@ export class BambuPlatform implements DynamicPlatformPlugin {
         this.connectMqtt(printerId);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        this.log.warn(`MQTT reconnect failed for ${printer.config.name}: ${message}`);
+        this.log.debug(`MQTT reconnect failed for ${printer.config.name}: ${message}`);
         this.scheduleReconnect(printerId);
       }
     }, delay);
