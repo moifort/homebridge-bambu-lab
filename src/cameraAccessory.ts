@@ -7,7 +7,6 @@ import type {
   CameraRecordingConfiguration,
   CameraRecordingDelegate,
   CameraStreamingDelegate,
-  HDSProtocolSpecificErrorReason,
   PlatformAccessory,
   PrepareStreamRequest,
   PrepareStreamResponse,
@@ -26,7 +25,6 @@ const RELAY_BITRATE_KBPS = 1500;
 const RELAY_GOP = RELAY_FPS;
 const SNAPSHOT_INTERVAL_FPS = 0.2;
 const SNAPSHOT_MAX_AGE_MS = 60_000;
-const SNAPSHOT_STALE_WARN_MS = 30_000;
 
 interface CameraSessionInfo {
   videoSSRC: number;
@@ -191,10 +189,6 @@ export class BambuCameraAccessory implements CameraStreamingDelegate, CameraReco
     this.controller = new this.platform.api.hap.CameraController(controllerOptions);
     this.accessory.configureController(this.controller);
 
-    this.accessory.on('identify', () => {
-      this.platform.log.info(`${this.context.displayName} identified!`);
-    });
-
     this.updateMotionDetected(false);
 
     if (hksvEnabled) {
@@ -217,10 +211,8 @@ export class BambuCameraAccessory implements CameraStreamingDelegate, CameraReco
     this.printerOnline = online;
 
     if (online) {
-      this.platform.log.debug(`${this.context.displayName}: printer back online, resuming camera pipeline.`);
       this.updateUnifiedPipelineState();
     } else {
-      this.platform.log.debug(`${this.context.displayName}: printer offline, pausing camera pipeline.`);
       this.stopUnifiedPipeline();
     }
   }
@@ -229,29 +221,19 @@ export class BambuCameraAccessory implements CameraStreamingDelegate, CameraReco
     const width = request.width > 0 ? request.width : 1280;
     const height = request.height > 0 ? request.height : 720;
 
-    this.platform.log.debug(`Snapshot request ${width}x${height}`);
-
     if (existsSync(this.snapshotTmpPath)) {
       try {
         const ageMs = Date.now() - statSync(this.snapshotTmpPath).mtimeMs;
         if (ageMs < SNAPSHOT_MAX_AGE_MS || !this.printerOnline) {
-          if (this.printerOnline && ageMs >= SNAPSHOT_STALE_WARN_MS) {
-            this.platform.log.warn(`Snapshot cache is stale (${Math.round(ageMs / 1000)}s old); returning it anyway.`);
-          }
-
-          const data = readFileSync(this.snapshotTmpPath);
-          this.platform.log.debug(`Snapshot from cache (${data.length} bytes, ${Math.round(ageMs / 1000)}s old)`);
-          callback(undefined, data);
+          callback(undefined, readFileSync(this.snapshotTmpPath));
           return;
         }
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        this.platform.log.debug(`Unable to reuse cached snapshot: ${message}`);
+      } catch {
+        // cached snapshot unusable
       }
     }
 
     if (!this.printerOnline) {
-      this.platform.log.debug('Printer is offline; skipping snapshot capture.');
       callback(new Error('Printer is offline.'));
       return;
     }
@@ -285,18 +267,14 @@ export class BambuCameraAccessory implements CameraStreamingDelegate, CameraReco
       'pipe:1',
     ];
 
-    this.platform.log.debug(`Snapshot ffmpeg args: ${args.join(' ')}`);
-
     const ffmpegProcess = spawn(ffmpegPath, args, { env: process.env });
 
     const chunks: Buffer[] = [];
     let stderr = '';
     let completed = false;
-    let timedOut = false;
 
     const timeout = setTimeout(() => {
       if (!completed) {
-        timedOut = true;
         ffmpegProcess.kill('SIGKILL');
       }
     }, snapshotTimeoutMs);
@@ -311,19 +289,8 @@ export class BambuCameraAccessory implements CameraStreamingDelegate, CameraReco
       clearTimeout(timeout);
 
       if (code === 0 && chunks.length > 0) {
-        this.platform.log.debug(`Snapshot success ${width}x${height} (${Buffer.concat(chunks).length} bytes)`);
         callback(undefined, Buffer.concat(chunks));
         return;
-      }
-
-      const details = stderr.trim();
-      if (timedOut) {
-        this.platform.log.warn(`Snapshot timed out after ${snapshotTimeoutMs}ms (${width}x${height})`);
-      } else if (details.length > 0) {
-        this.platform.log.warn(`Snapshot ffmpeg failed code=${code}: ${details}`);
-        this.logDefaultCameraEndpointHint(details);
-      } else {
-        this.platform.log.warn(`Snapshot ffmpeg failed code=${code}`);
       }
 
       callback(new Error(`Snapshot ffmpeg exited code=${code}. ${stderr.trim()}`));
@@ -332,7 +299,6 @@ export class BambuCameraAccessory implements CameraStreamingDelegate, CameraReco
     ffmpegProcess.on('error', (error) => {
       completed = true;
       clearTimeout(timeout);
-      this.platform.log.warn(`Snapshot ffmpeg spawn error: ${error.message}`);
       callback(error);
     });
   }
@@ -429,43 +395,18 @@ export class BambuCameraAccessory implements CameraStreamingDelegate, CameraReco
         + `&pkt_size=${packetSize}`,
       ];
 
-      this.platform.log.info(`Starting camera stream (${sessionId}) via ${pipelineRunning ? 'relay' : 'direct'}`);
-      this.platform.log.info(`Camera ffmpeg args (${sessionId}): ${args.join(' ')}`);
-
-      const ffmpegProcess = spawn(ffmpegPath, args, { env: process.env });
+      const ffmpegProcess = spawn(ffmpegPath, args, {
+        env: process.env,
+        stdio: ['ignore', 'ignore', 'ignore'],
+      });
       this.ongoingSessions.set(sessionId, ffmpegProcess);
       this.pendingSessions.delete(sessionId);
 
-      let stderrBuffer = '';
-
-      ffmpegProcess.stderr.on('data', (data: Buffer) => {
-        const message = data.toString().trim();
-        if (message.length > 0) {
-          stderrBuffer = (stderrBuffer + '\n' + message).slice(-4000);
-          this.platform.log.info(`Camera ffmpeg (${sessionId}): ${message}`);
-        }
+      ffmpegProcess.on('error', () => {
+        // session cleaned up on close
       });
 
-      ffmpegProcess.on('error', (error) => {
-        this.platform.log.warn(`Camera ffmpeg error (${sessionId}): ${error.message}`);
-      });
-
-      ffmpegProcess.on('close', (code, signal) => {
-        const expectedStop = this.stoppingSessions.has(sessionId)
-          || signal === 'SIGTERM'
-          || signal === 'SIGKILL';
-
-        if (code && code !== 0 && !expectedStop) {
-          const details = stderrBuffer.trim();
-          if (details.length > 0) {
-            this.platform.log.warn(`Camera ffmpeg failed (${sessionId}) code=${code}: ${details}`);
-            this.logDefaultCameraEndpointHint(details);
-          } else {
-            this.platform.log.warn(`Camera ffmpeg failed (${sessionId}) code=${code}`);
-          }
-        }
-
-        this.platform.log.info(`Camera stream stopped (${sessionId}) code=${code} signal=${signal ?? 'none'}`);
+      ffmpegProcess.on('close', () => {
         this.stoppingSessions.delete(sessionId);
         this.ongoingSessions.delete(sessionId);
       });
@@ -490,7 +431,6 @@ export class BambuCameraAccessory implements CameraStreamingDelegate, CameraReco
 
   updateRecordingActive(active: boolean): void {
     this.recordingActive = active;
-    this.platform.log.info(`HKSV recording active: ${active}`);
     this.updateUnifiedPipelineState();
   }
 
@@ -499,20 +439,11 @@ export class BambuCameraAccessory implements CameraStreamingDelegate, CameraReco
     this.recordingConfig = configuration;
 
     if (!configuration) {
-      this.platform.log.warn('HKSV recording configuration cleared.');
       this.updateUnifiedPipelineState();
       return;
     }
 
-    const [width, height, fps] = configuration.videoCodec.resolution;
-    this.platform.log.info(
-      `HKSV recording config: ${width}x${height}@${fps}`
-      + ` bitrate=${configuration.videoCodec.parameters.bitRate}kbps`
-      + ` fragment=${configuration.mediaContainerConfiguration.fragmentLength}ms`,
-    );
-
     if (hadConfig && this.unifiedStdoutIsHksv && this.unifiedProcess) {
-      this.platform.log.info('HKSV config changed — restarting unified pipeline.');
       this.stopUnifiedPipeline();
     }
 
@@ -555,7 +486,6 @@ export class BambuCameraAccessory implements CameraStreamingDelegate, CameraReco
     }
 
     this.recordingConsumers.set(streamId, consumer);
-    this.platform.log.info(`HKSV stream opened (${streamId}) with ${Math.max(0, consumer.queue.length - 1)} prebuffer fragments.`);
 
     try {
       while (!consumer.closed) {
@@ -580,15 +510,10 @@ export class BambuCameraAccessory implements CameraStreamingDelegate, CameraReco
       consumer.closed = true;
       this.recordingConsumers.delete(streamId);
       this.wakeConsumer(consumer);
-      this.platform.log.debug(`HKSV stream cleanup complete (${streamId}).`);
     }
   }
 
-  acknowledgeStream(streamId: number): void {
-    this.platform.log.debug(`HKSV stream acknowledged: ${streamId}`);
-  }
-
-  closeRecordingStream(streamId: number, reason: HDSProtocolSpecificErrorReason | undefined): void {
+  closeRecordingStream(streamId: number): void {
     const consumer = this.recordingConsumers.get(streamId);
     if (!consumer) {
       return;
@@ -604,7 +529,6 @@ export class BambuCameraAccessory implements CameraStreamingDelegate, CameraReco
     consumer.closed = true;
     this.wakeConsumer(consumer);
     this.recordingConsumers.delete(streamId);
-    this.platform.log.debug(`HKSV close stream ${streamId}, reason=${reason ?? 'unknown'}`);
   }
 
   private updateUnifiedPipelineState(): void {
@@ -635,13 +559,11 @@ export class BambuCameraAccessory implements CameraStreamingDelegate, CameraReco
     }
 
     if (!this.printerOnline) {
-      this.platform.log.debug('Printer is offline; unified pipeline will start once it reconnects.');
       return;
     }
 
     const streamUrl = this.platform.getCameraStreamUrl(this.context.printerId);
     if (!streamUrl) {
-      this.platform.log.warn('Cannot start unified pipeline: camera stream URL not configured.');
       return;
     }
 
@@ -789,11 +711,9 @@ export class BambuCameraAccessory implements CameraStreamingDelegate, CameraReco
       ...outputArgs,
     ];
 
-    this.platform.log.info(`Unified pipeline ffmpeg args: ${args.join(' ')}`);
-
     const stdioConfig: Array<'ignore' | 'pipe'> = needsPipe3
-      ? ['ignore', 'pipe', 'pipe', 'pipe']
-      : ['ignore', 'pipe', 'pipe'];
+      ? ['ignore', 'pipe', 'ignore', 'pipe']
+      : ['ignore', 'pipe', 'ignore'];
 
     this.resetRecordingState();
 
@@ -802,15 +722,13 @@ export class BambuCameraAccessory implements CameraStreamingDelegate, CameraReco
       stdio: stdioConfig as unknown as [
         'ignore',
         'pipe',
-        'pipe',
+        'ignore',
         ...Array<'pipe'>,
       ],
     });
     this.unifiedProcess = processRef;
     this.unifiedStdoutIsHksv = hasHksv;
     this.unifiedHasPipe3Motion = needsPipe3;
-
-    let stderrBuffer = '';
 
     if (hasHksv) {
       processRef.stdout!.on('data', (chunk: Buffer) => {
@@ -830,16 +748,6 @@ export class BambuCameraAccessory implements CameraStreamingDelegate, CameraReco
       });
     }
 
-    processRef.stderr!.on('data', (data: Buffer) => {
-      const message = data.toString().trim();
-      if (message.length === 0) {
-        return;
-      }
-
-      stderrBuffer = (stderrBuffer + '\n' + message).slice(-4000);
-      this.platform.log.debug(`Unified pipeline: ${message}`);
-    });
-
     processRef.on('close', (code: number | null, signal: NodeJS.Signals | null) => {
       const expectedStop = signal === 'SIGTERM' || signal === 'SIGKILL';
 
@@ -848,18 +756,7 @@ export class BambuCameraAccessory implements CameraStreamingDelegate, CameraReco
         this.recordingCurrentFragment = Buffer.alloc(0);
       }
 
-      if (code && code !== 0 && !expectedStop) {
-        const details = stderrBuffer.trim();
-        if (details.length > 0) {
-          this.platform.log.warn(`Unified pipeline failed code=${code}: ${details}`);
-          this.logDefaultCameraEndpointHint(details);
-        } else {
-          this.platform.log.warn(`Unified pipeline failed code=${code}`);
-        }
-      }
-
       this.unifiedProcess = undefined;
-      this.platform.log.info(`Unified pipeline stopped code=${code} signal=${signal ?? 'none'}`);
 
       if (!expectedStop && (hasHksv || hasMotion)) {
         this.unifiedRestartTimer = setTimeout(() => {
@@ -869,8 +766,8 @@ export class BambuCameraAccessory implements CameraStreamingDelegate, CameraReco
       }
     });
 
-    processRef.on('error', (error: Error) => {
-      this.platform.log.warn(`Unified pipeline spawn error: ${error.message}`);
+    processRef.on('error', () => {
+      // restart is handled by the close handler
     });
   }
 
@@ -909,22 +806,6 @@ export class BambuCameraAccessory implements CameraStreamingDelegate, CameraReco
     this.recordingInitSegment = undefined;
     this.motionFrameBuffer = Buffer.alloc(0);
     this.previousMotionFrame = undefined;
-  }
-
-  private logDefaultCameraEndpointHint(details: string): void {
-    if (!this.platform.isUsingDefaultCameraStreamUrl(this.context.printerId)) {
-      return;
-    }
-
-    if (!/connection refused/i.test(details)) {
-      return;
-    }
-
-    this.platform.log.warn(
-      'The default Bambu camera endpoint was refused. '
-      + 'Enable the camera only for printers with a reachable LAN stream, '
-      + 'or set cameraRtspUrl to the correct endpoint for this model.',
-    );
   }
 
   private startRecordingMonitor(): void {
@@ -985,7 +866,6 @@ export class BambuCameraAccessory implements CameraStreamingDelegate, CameraReco
         this.recordingInitAccumulation = Buffer.concat([this.recordingInitAccumulation, box]);
         if (boxType === 'moov') {
           this.recordingInitSegment = Buffer.from(this.recordingInitAccumulation);
-          this.platform.log.info('HKSV init segment ready.');
           this.recordingInitAccumulation = Buffer.alloc(0);
         }
 
@@ -1160,14 +1040,6 @@ export class BambuCameraAccessory implements CameraStreamingDelegate, CameraReco
     try {
       const { port: videoPort, socket: returnSocket } = await this.bindReturnPort();
       const videoSSRC = this.randomSsrc();
-
-      this.platform.log.info(
-        `Preparing stream ${request.sessionID}`
-        + ` source=${request.sourceAddress}`
-        + ` version=${request.addressVersion}`
-        + ` target=${request.targetAddress}:${request.video.port}`
-        + ` returnPort=${videoPort}`,
-      );
 
       const sessionInfo: CameraSessionInfo = {
         videoSSRC,

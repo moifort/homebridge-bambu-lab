@@ -52,10 +52,6 @@ export class BambuPrinterAccessory {
     this.service.setCharacteristic(this.platform.Characteristic.Name, this.context.displayName);
     this.platform.registerAccessoryHandler(this.accessory.UUID, this);
     this.syncState(this.platform.getState(this.context.printerId));
-
-    this.accessory.on('identify', () => {
-      this.platform.log.info(`${this.context.displayName} identified!`);
-    });
   }
 
   syncState(state: PrinterState) {
@@ -85,10 +81,7 @@ export class BambuPrinterAccessory {
 
     try {
       await this.platform.setChamberLight(this.context.printerId, on);
-      this.platform.log.debug('Set chamber light:', on);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.platform.log.error(`Failed to set chamber light: ${message}`);
+    } catch {
       throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
     }
   }
@@ -103,10 +96,7 @@ export class BambuPrinterAccessory {
 
     try {
       await this.platform.setPrintingActive(this.context.printerId, active);
-      this.platform.log.debug('Set print active:', active);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.platform.log.error(`Failed to set print state: ${message}`);
+    } catch {
       throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
     }
   }
@@ -122,9 +112,8 @@ export class BambuPrinterAccessory {
     if (!on) {
       try {
         await this.platform.setSpeedPercent(this.context.printerId, 50);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        this.platform.log.error(`Failed to set default speed profile: ${message}`);
+      } catch {
+        // ignored
       }
     }
   }
@@ -138,10 +127,7 @@ export class BambuPrinterAccessory {
 
     try {
       await this.platform.setSpeedPercent(this.context.printerId, percent);
-      this.platform.log.debug('Set print speed percent:', percent);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.platform.log.error(`Failed to set print speed: ${message}`);
+    } catch {
       throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
     }
   }

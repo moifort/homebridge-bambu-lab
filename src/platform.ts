@@ -118,10 +118,7 @@ export class BambuPlatform implements DynamicPlatformPlugin {
     this.storagePath = join(this.api.user.storagePath(), PLUGIN_NAME);
     mkdirSync(this.storagePath, { recursive: true });
 
-    this.log.debug('Finished initializing platform:', this.config.name);
-
     this.api.on('didFinishLaunching', () => {
-      this.log.debug('Executed didFinishLaunching callback');
       this.handleDidFinishLaunching();
     });
 
@@ -131,7 +128,6 @@ export class BambuPlatform implements DynamicPlatformPlugin {
   }
 
   configureAccessory(accessory: PlatformAccessory) {
-    this.log.info('Loading accessory from cache:', accessory.displayName);
     this.accessories.set(accessory.UUID, accessory);
   }
 
@@ -171,11 +167,6 @@ export class BambuPlatform implements DynamicPlatformPlugin {
     }
 
     return this.buildDefaultCameraStreamUrl(printer.config);
-  }
-
-  isUsingDefaultCameraStreamUrl(printerId: string): boolean {
-    const printer = this.printers.get(printerId);
-    return printer != null && !printer.config.cameraRtspUrl;
   }
 
   getFfmpegPath(printerId: string): string {
@@ -348,7 +339,6 @@ export class BambuPlatform implements DynamicPlatformPlugin {
           const existingAccessory = this.accessories.get(uuid);
 
           if (existingAccessory) {
-            this.log.info('Restoring existing accessory from cache:', existingAccessory.displayName);
             existingAccessory.context.device = device;
             existingAccessory.displayName = device.displayName;
 
@@ -360,8 +350,6 @@ export class BambuPlatform implements DynamicPlatformPlugin {
             this.accessories.set(uuid, existingAccessory);
             this.createAccessoryHandler(device.kind, existingAccessory);
           } else {
-            this.log.info('Adding new accessory:', device.displayName);
-
             const category = device.kind === 'camera' ? this.api.hap.Categories.IP_CAMERA : undefined;
             const accessory = new this.api.platformAccessory(device.displayName, uuid, category);
             accessory.context.device = device;
@@ -373,16 +361,14 @@ export class BambuPlatform implements DynamicPlatformPlugin {
           }
 
           discoveredCacheUUIDs.push(uuid);
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          this.log.error(`Failed to initialize accessory ${device.displayName}: ${message}`);
+        } catch {
+          // accessory skipped
         }
       }
     }
 
     for (const [uuid, accessory] of this.accessories) {
       if (!discoveredCacheUUIDs.includes(uuid)) {
-        this.log.info('Removing existing accessory from cache:', accessory.displayName);
         this.unregisterAccessoryHandler(uuid);
         this.api.unregisterPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [accessory]);
         this.accessories.delete(uuid);
@@ -395,7 +381,6 @@ export class BambuPlatform implements DynamicPlatformPlugin {
 
     const printers = this.getNormalizedPrinters();
     if (printers.length === 0) {
-      this.log.warn('No Bambu printers configured. Add at least one printer in the Homebridge settings UI.');
       return;
     }
 
@@ -415,10 +400,8 @@ export class BambuPlatform implements DynamicPlatformPlugin {
     for (const printerId of this.printers.keys()) {
       try {
         this.connectMqtt(printerId);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        const printerName = this.printers.get(printerId)?.config.name ?? printerId;
-        this.log.error(`Failed to start MQTT client for ${printerName}: ${message}`);
+      } catch {
+        // printer skipped
       }
     }
   }
@@ -428,9 +411,8 @@ export class BambuPlatform implements DynamicPlatformPlugin {
       this.initializePrinters();
       this.discoverDevices();
       this.connectMqttClients();
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.log.error(`Platform startup failed: ${message}`);
+    } catch {
+      // startup aborted
     }
   }
 
@@ -466,33 +448,26 @@ export class BambuPlatform implements DynamicPlatformPlugin {
       clientId: `homebridge-bambu-lab-${printer.config.serialNumber.slice(-6)}-${Math.floor(Math.random() * 10000)}`,
     };
 
-    this.log.debug(`Connecting to ${printer.config.name} MQTT broker at ${url}`);
-
     const client = mqtt.connect(url, options);
     printer.mqttClient = client;
 
     client.on('connect', () => {
-      this.log.info(`MQTT connected for ${printer.config.name}`);
       printer.reconnectDelayMs = MQTT_RECONNECT_INITIAL_MS;
       printer.state.online = true;
       this.syncAccessories(printerId);
 
       client.subscribe(printer.reportTopic, { qos: 0 }, (err) => {
         if (err) {
-          this.log.error(`Failed to subscribe to ${printer.reportTopic}: ${err.message}`);
           return;
         }
-
-        this.log.debug(`Subscribed to ${printer.reportTopic}`);
 
         void this.publishCommand(printerId, {
           pushing: {
             sequence_id: '0',
             command: 'pushall',
           },
-        }).catch((error: unknown) => {
-          const message = error instanceof Error ? error.message : String(error);
-          this.log.error(`Failed to request full state for ${printer.config.name}: ${message}`);
+        }).catch(() => {
+          // full state request failed
         });
       });
     });
@@ -506,9 +481,6 @@ export class BambuPlatform implements DynamicPlatformPlugin {
     });
 
     client.on('close', () => {
-      if (printer.state.online) {
-        this.log.info(`MQTT disconnected for ${printer.config.name}`);
-      }
       printer.state.online = false;
       this.syncAccessories(printerId);
       this.scheduleReconnect(printerId);
@@ -519,8 +491,8 @@ export class BambuPlatform implements DynamicPlatformPlugin {
       this.syncAccessories(printerId);
     });
 
-    client.on('error', (error) => {
-      this.log.debug(`MQTT connection issue for ${printer.config.name}: ${error.message}`);
+    client.on('error', () => {
+      // handled by the close/reconnect flow
     });
   }
 
@@ -531,7 +503,6 @@ export class BambuPlatform implements DynamicPlatformPlugin {
     }
 
     const delay = printer.reconnectDelayMs;
-    this.log.debug(`Reconnecting to ${printer.config.name} in ${Math.round(delay / 1000)}s.`);
 
     printer.reconnectTimer = setTimeout(() => {
       printer.reconnectTimer = undefined;
@@ -539,9 +510,7 @@ export class BambuPlatform implements DynamicPlatformPlugin {
 
       try {
         this.connectMqtt(printerId);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        this.log.debug(`MQTT reconnect failed for ${printer.config.name}: ${message}`);
+      } catch {
         this.scheduleReconnect(printerId);
       }
     }, delay);
@@ -560,9 +529,8 @@ export class BambuPlatform implements DynamicPlatformPlugin {
     try {
       client.removeAllListeners();
       client.end(true);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.log.warn(`Error while closing MQTT client for ${printer.config.name}: ${message}`);
+    } catch {
+      // client already closed
     }
   }
 
@@ -588,8 +556,6 @@ export class BambuPlatform implements DynamicPlatformPlugin {
         resolve();
       });
     });
-
-    this.log.debug(`MQTT publish ${printer.requestTopic}: ${body}`);
   }
 
   private handleReportMessage(printerId: string, rawPayload: string) {
@@ -636,10 +602,8 @@ export class BambuPlatform implements DynamicPlatformPlugin {
       }
 
       this.syncAccessories(printerId);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.log.warn(`Unable to parse MQTT payload for ${printer.config.name}: ${message}`);
-      this.log.debug(`Raw payload: ${rawPayload}`);
+    } catch {
+      // malformed payload ignored
     }
   }
 
@@ -718,12 +682,10 @@ export class BambuPlatform implements DynamicPlatformPlugin {
       const lanAccessCode = this.normalizeString(printer.lanAccessCode);
 
       if (!ipAddress || !serialNumber || !lanAccessCode) {
-        this.log.warn(`Skipping printer #${index + 1}: ipAddress, serialNumber, and lanAccessCode are required.`);
         return;
       }
 
       if (seenSerials.has(serialNumber)) {
-        this.log.warn(`Skipping duplicate printer serial number: ${serialNumber}`);
         return;
       }
 
@@ -759,8 +721,6 @@ export class BambuPlatform implements DynamicPlatformPlugin {
     }
 
     if (this.hasLegacyPrinterConfig()) {
-      this.log.info('Using legacy single-printer configuration. Save settings in the Homebridge UI to migrate to the new multi-printer format.');
-
       return [{
         name: this.normalizeString(this.configTyped.name) ?? DEFAULT_PRINTER_NAME,
         model: DEFAULT_PRINTER_MODEL,

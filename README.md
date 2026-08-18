@@ -30,7 +30,8 @@ This project started when I was too lazy to open the Bambu app to turn off the c
   - **Optional Fan**: print speed override slider.
   - **Optional Camera**: HomeKit camera accessory for the printer stream.
 - Publishes commands to `device/<serial>/request`.
-- Handles MQTT disconnects and reconnects automatically per printer, with exponential backoff (5s up to 5 minutes) and warning-level logs only — powering the printer off no longer floods the Homebridge log with errors.
+- Handles MQTT disconnects and reconnects automatically per printer, with exponential backoff (5s up to 5 minutes).
+- Runs completely silently: the plugin writes nothing to the Homebridge log.
 
 ## Configuration
 
