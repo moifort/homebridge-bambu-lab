@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- Camera snapshots no longer trigger HomeKit's "image snapshot handler is slow to respond" warning. A cached snapshot is now returned immediately, even when older than 60 seconds, and a fresh frame is captured from the printer's RTSP stream in the background (concurrent requests share a single capture). A request waits for ffmpeg only when no cached snapshot exists yet.
+
 ## [1.2.3] - 2026-08-18
 
 ### Changed

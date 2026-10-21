@@ -1,6 +1,6 @@
 import { createSocket, type Socket } from 'node:dgram';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 
 import type {
   CameraController,
@@ -90,6 +90,7 @@ export class BambuCameraAccessory implements CameraStreamingDelegate, CameraReco
   private motionResetTimer?: NodeJS.Timeout;
 
   private printerOnline = false;
+  private snapshotInFlight?: Promise<Buffer>;
 
   constructor(
     private readonly platform: BambuPlatform,
@@ -221,16 +222,17 @@ export class BambuCameraAccessory implements CameraStreamingDelegate, CameraReco
     const width = request.width > 0 ? request.width : 1280;
     const height = request.height > 0 ? request.height : 720;
 
-    if (existsSync(this.snapshotTmpPath)) {
-      try {
-        const ageMs = Date.now() - statSync(this.snapshotTmpPath).mtimeMs;
-        if (ageMs < SNAPSHOT_MAX_AGE_MS || !this.printerOnline) {
-          callback(undefined, readFileSync(this.snapshotTmpPath));
-          return;
-        }
-      } catch {
-        // cached snapshot unusable
+    // Serve any cached snapshot immediately: capturing a fresh frame from the printer's
+    // RTSP stream takes longer than the 5s HomeKit allows before flagging the handler as slow.
+    const cached = this.readCachedSnapshot();
+    if (cached) {
+      callback(undefined, cached.image);
+      if (cached.ageMs >= SNAPSHOT_MAX_AGE_MS && this.printerOnline) {
+        this.refreshSnapshot(width, height).catch(() => {
+          // keep serving the previous snapshot
+        });
       }
+      return;
     }
 
     if (!this.printerOnline) {
@@ -238,12 +240,56 @@ export class BambuCameraAccessory implements CameraStreamingDelegate, CameraReco
       return;
     }
 
+    this.refreshSnapshot(width, height).then(
+      (image) => callback(undefined, image),
+      (error: Error) => callback(error),
+    );
+  }
+
+  private readCachedSnapshot(): { image: Buffer; ageMs: number } | undefined {
+    if (!existsSync(this.snapshotTmpPath)) {
+      return undefined;
+    }
+    try {
+      const ageMs = Date.now() - statSync(this.snapshotTmpPath).mtimeMs;
+      const image = readFileSync(this.snapshotTmpPath);
+      return image.length > 0 ? { image, ageMs } : undefined;
+    } catch {
+      // cached snapshot unusable
+      return undefined;
+    }
+  }
+
+  private refreshSnapshot(width: number, height: number): Promise<Buffer> {
+    if (!this.snapshotInFlight) {
+      this.snapshotInFlight = this.captureSnapshot(width, height)
+        .then((image) => {
+          this.writeCachedSnapshot(image);
+          return image;
+        })
+        .finally(() => {
+          this.snapshotInFlight = undefined;
+        });
+    }
+    return this.snapshotInFlight;
+  }
+
+  private writeCachedSnapshot(image: Buffer): void {
+    const tmpPath = `${this.snapshotTmpPath}.tmp`;
+    try {
+      writeFileSync(tmpPath, image);
+      renameSync(tmpPath, this.snapshotTmpPath);
+    } catch {
+      // cache is best effort
+    }
+  }
+
+  private captureSnapshot(width: number, height: number): Promise<Buffer> {
     const pipelineRunning = this.unifiedProcess != null;
     const streamUrl = this.platform.getCameraStreamUrl(this.context.printerId);
 
     if (!pipelineRunning && !streamUrl) {
-      callback(new Error('Camera stream URL is not configured.'));
-      return;
+      return Promise.reject(new Error('Camera stream URL is not configured.'));
     }
 
     const sourceUrl = pipelineRunning
@@ -267,41 +313,44 @@ export class BambuCameraAccessory implements CameraStreamingDelegate, CameraReco
       'pipe:1',
     ];
 
-    const ffmpegProcess = spawn(ffmpegPath, args, { env: process.env });
+    return new Promise((resolve, reject) => {
+      const ffmpegProcess = spawn(ffmpegPath, args, { env: process.env });
 
-    const chunks: Buffer[] = [];
-    let stderr = '';
-    let completed = false;
+      const chunks: Buffer[] = [];
+      let stderr = '';
+      let completed = false;
 
-    const timeout = setTimeout(() => {
-      if (!completed) {
-        ffmpegProcess.kill('SIGKILL');
-      }
-    }, snapshotTimeoutMs);
+      const timeout = setTimeout(() => {
+        if (!completed) {
+          ffmpegProcess.kill('SIGKILL');
+        }
+      }, snapshotTimeoutMs);
 
-    ffmpegProcess.stdout.on('data', (data: Buffer) => chunks.push(data));
-    ffmpegProcess.stderr.on('data', (data: Buffer) => {
-      stderr += data.toString();
-    });
+      ffmpegProcess.stdout.on('data', (data: Buffer) => chunks.push(data));
+      ffmpegProcess.stderr.on('data', (data: Buffer) => {
+        stderr += data.toString();
+      });
 
-    ffmpegProcess.on('close', (code) => {
-      completed = true;
-      clearTimeout(timeout);
+      ffmpegProcess.on('close', (code) => {
+        completed = true;
+        clearTimeout(timeout);
 
-      if (code === 0 && chunks.length > 0) {
-        callback(undefined, Buffer.concat(chunks));
-        return;
-      }
+        if (code === 0 && chunks.length > 0) {
+          resolve(Buffer.concat(chunks));
+          return;
+        }
 
-      callback(new Error(`Snapshot ffmpeg exited code=${code}. ${stderr.trim()}`));
-    });
+        reject(new Error(`Snapshot ffmpeg exited code=${code}. ${stderr.trim()}`));
+      });
 
-    ffmpegProcess.on('error', (error) => {
-      completed = true;
-      clearTimeout(timeout);
-      callback(error);
+      ffmpegProcess.on('error', (error) => {
+        completed = true;
+        clearTimeout(timeout);
+        reject(error);
+      });
     });
   }
+
 
   prepareStream(
     request: PrepareStreamRequest,
