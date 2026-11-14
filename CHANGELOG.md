@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+The plugin is now camera-only and built for a smooth, low-latency live view, including on a Raspberry Pi.
+
+### Changed
+
+- **Breaking:** the plugin only exposes the printer camera. A camera is created for every configured printer (the camera no longer needs to be enabled).
+- **Breaking:** the live view at 1280 px and wider forwards the printer's H.264 stream as is instead of decoding and re-encoding it on the Homebridge host. Measured with a local printer emulator (1080p30, 1 s keyframe interval): steady latency 300 ms → 35 ms, ffmpeg CPU time divided by about 8, first image 1.5 s → 0.55 s on average. The stream keeps the printer's resolution and bitrate.
+- Smaller resolutions (Apple Watch, remote viewing) are re-encoded to the requested size, frame rate and bitrate with `libx264` (`ultrafast`, `zerolatency`), two decoder threads, a 1 s keyframe interval and a 1 s rate-control buffer: about 100 ms of latency instead of 300 ms. `libx264` is now used on macOS too: `h264_videotoolbox` added about 300 ms.
+- ffmpeg no longer probes the RTSP stream before starting (`-probesize 32 -analyzeduration 0`), which saved about one second before the first image.
+- Snapshots are no longer captured while a live view is open: the cached snapshot is served, so the printer never sees two RTSP connections. After a failed capture (printer off), the next attempt waits 30 s, doubling up to 5 minutes.
+- Fewer advertised resolutions (16:9 only, plus 320×240 for Apple Watch) and two stream slots instead of six.
+
+### Removed
+
+- **Breaking:** MQTT connection, chamber light, print switch and print speed accessories. Their cached accessories are removed from HomeKit on startup.
+- **Breaking:** HomeKit Secure Video, local motion detection and the motion sensor, and the always-on relay pipeline they needed.
+- **Breaking:** options `mqttPort`, `mqttUsername`, `rejectUnauthorized`, `enableSpeedControl`, `enablePrintSwitch`, `enableChamberLight`, `enableCamera`, `cameraVideoCodec`, `enableHksv`, `enableLocalMotionDetection`, `motionSensitivity`, `hksvPrebufferLengthMs`, `hksvFragmentLengthMs`, `hksvMaxRecordingSeconds`. They are ignored if still present.
+- The `mqtt` and `homebridge-lib` dependencies: the plugin has no runtime dependency left.
+
+### Fixed
+
+- The camera works with ffmpeg 8 and later, which verify TLS certificates by default and rejected the printer's self-signed certificate. TLS verification is turned off when the installed ffmpeg supports the option.
+- A live view no longer stays open forever: ffmpeg gives up after 5 s without data from the printer, HomeKit is told when the stream ends on its own, a session whose viewer disappeared without stopping it (no RTCP reports for 5 s) is closed, ffmpeg is killed if it ignores SIGTERM for 2 s, and every ffmpeg is stopped when Homebridge shuts down.
+
 ## [1.2.4] - 2026-10-21
 
 ### Fixed

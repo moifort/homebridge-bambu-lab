@@ -1,6 +1,6 @@
 # homebridge-bambu-lab
 
-Plugin Homebridge pour imprimantes Bambu Lab (MQTT local). Publié sur npm sous `@moifort/homebridge-bambu-lab` (compte npm : moifort). Fork de trinityhades/homebridge-bambu-lab — le paquet npm d'origine `homebridge-bambu-lab` appartient à trinityhades, ne pas publier dessus.
+Plugin Homebridge qui expose la caméra des imprimantes Bambu Lab dans HomeKit (direct basse latence : flux H.264 de l'imprimante transmis sans réencodage, réencodage seulement pour les petites résolutions). Aucune autre fonction (plus de MQTT depuis la 2.0). Publié sur npm sous `@moifort/homebridge-bambu-lab` (compte npm : moifort). Fork de trinityhades/homebridge-bambu-lab — le paquet npm d'origine `homebridge-bambu-lab` appartient à trinityhades, ne pas publier dessus.
 
 ## Commandes
 

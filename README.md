@@ -14,30 +14,24 @@
 
 # Homebridge Bambu Lab
 
-Homebridge dynamic platform plugin for controlling one or more **Bambu Lab printers** over the local MQTT interface. With support for HKSV to view and record printer camera streams, local motion detection, print state monitoring, and print control.
-
-This project started when I was too lazy to open the Bambu app to turn off the chamber light and wanted to just say `"Hey Siri, turn off the printer light."` And like any good developer, I decided to timesink _15 hours_ into a Homebridge plugin to save myself _15 seconds_.
+Homebridge plugin that exposes the camera of one or more **Bambu Lab printers** to HomeKit, with a low-latency live view. Nothing else: no MQTT, no light or print controls.
 
 ## Features
 
-- Supports multiple Bambu printers from a single Homebridge platform instance.
-- Configurable from the Homebridge settings UI, with multi-printer support.
-- Lets you assign a custom name and selected model to each printer.
-- Subscribes to `device/<serial>/report` for printer state updates.
-- Exposes HomeKit accessories per printer:
-  - **Lightbulb**: chamber light on/off (hide it with `enableChamberLight: false`).
-  - **Switch**: pause/resume active print (hide it with `enablePrintSwitch: false`).
-  - **Optional Fan**: print speed override slider.
-  - **Optional Camera**: HomeKit camera accessory for the printer stream.
-- Publishes commands to `device/<serial>/request`.
-- Handles MQTT disconnects and reconnects automatically per printer, with exponential backoff (5s up to 5 minutes).
-- Runs completely silently: the plugin writes nothing to the Homebridge log.
+- One HomeKit camera per printer, configured from the Homebridge settings UI.
+- **Low-latency live view**: at 1280 px and wider, the printer's own H.264 stream is forwarded to HomeKit as is (`-c:v copy`), with no decoding or re-encoding. The Homebridge host barely uses any CPU, which keeps the stream smooth on a Raspberry Pi.
+- **Small resolutions** (Apple Watch, remote viewing on a slow connection) are re-encoded to the size and bitrate HomeKit asks for, with `libx264` tuned for zero latency.
+- **Snapshots** for the Home app tiles: the last snapshot is returned instantly and refreshed in the background when older than 60 seconds. While a live view is open, the cached snapshot is served instead of opening a second connection to the printer. When the printer is off, capture attempts back off (30 s up to 5 minutes).
+- Silent: the plugin writes nothing to the Homebridge log.
+
+## Requirements
+
+- A printer that serves its camera over RTSPS on port 322 with **LAN Mode Liveview** enabled (X1 series and newer models with LAN live view). P1 and A1 printers don't provide an RTSP stream: use `cameraRtspUrl` with an external RTSP bridge for them.
+- `ffmpeg` with `libx264`, in the `PATH` of the Homebridge user or set with `ffmpegPath`. On Raspberry Pi OS, `sudo apt install ffmpeg` is enough. ffmpeg 4.x or later: the plugin checks which RTSP options the installed version supports (TLS verification, socket timeout) the first time it is used.
 
 ## Configuration
 
-Use the Homebridge UI to add printers, choose each model, and edit printer names.
-
-Manual `config.json` example:
+Use the Homebridge UI, or add the platform to `config.json`:
 
 ```json
 {
@@ -49,54 +43,46 @@ Manual `config.json` example:
       "model": "X1 Carbon",
       "ipAddress": "192.168.1.50",
       "serialNumber": "01S00C123456789",
-      "lanAccessCode": "12345678",
-      "mqttPort": 8883,
-      "mqttUsername": "bblp",
-      "rejectUnauthorized": false,
-      "enableSpeedControl": true,
-      "enablePrintSwitch": true,
-      "enableChamberLight": true,
-      "enableCamera": true,
-      "cameraName": "Office Printer Camera",
-      "cameraRtspUrl": "rtsps://bblp:12345678@192.168.1.50:322/streaming/live/1",
-      "ffmpegPath": "ffmpeg",
-      "cameraVideoCodec": "h264_videotoolbox",
-      "enableHksv": false,
-      "enableLocalMotionDetection": false,
-      "motionSensitivity": 40,
-      "hksvPrebufferLengthMs": 4000,
-      "hksvFragmentLengthMs": 4000,
-      "hksvMaxRecordingSeconds": 20
-    },
-    {
-      "name": "Workshop Printer",
-      "model": "P1S",
-      "ipAddress": "192.168.1.51",
-      "serialNumber": "03W00C987654321",
-      "lanAccessCode": "87654321",
-      "enableCamera": false
+      "lanAccessCode": "12345678"
     }
   ]
 }
 ```
 
+| Option | Required | Description |
+| --- | --- | --- |
+| `name` | yes | Printer name. The camera is named `<name> Camera`. |
+| `model` | yes | Printer model, shown in the accessory information. |
+| `ipAddress` | yes | Local IP address of the printer. |
+| `serialNumber` | yes | Printer serial number. It identifies the camera in HomeKit: changing it creates a new camera. |
+| `lanAccessCode` | yes | LAN access code from the printer's network settings. |
+| `cameraName` | no | Camera name in HomeKit, instead of `<name> Camera`. |
+| `cameraRtspUrl` | no | Custom stream URL. Default: `rtsps://bblp:<lanAccessCode>@<ipAddress>:322/streaming/live/1`. |
+| `ffmpegPath` | no | Path to the ffmpeg binary. Default: `ffmpeg`. |
 
-## Camera Notes
+Options from version 1.x (MQTT, light, print switch, speed, HKSV, motion detection, encoder) are ignored.
 
-- Camera is opt-in. Set `enableCamera: true` when the printer exposes a reachable LAN camera stream, or provide `cameraRtspUrl` to use a custom endpoint.
-- If `cameraRtspUrl` is omitted, the plugin auto-builds: `rtsps://<mqttUsername>:<lanAccessCode>@<ipAddress>:322/streaming/live/1`.
-- If ffmpeg reports `Connection refused` for the auto-built `:322` URL, that printer likely does not expose the default LAN stream at that endpoint. Disable the camera or override `cameraRtspUrl` with the correct stream URL.
-- `ffmpeg` must be installed and available in PATH, or configured with `ffmpegPath` per printer.
-- `enableHksv` turns on HomeKit Secure Video recording services.
-- `enableLocalMotionDetection` runs a local frame-difference detector and updates a Motion Sensor characteristic.
-- HKSV uses a rolling fragmented-MP4 prebuffer and starts streams with init segment + buffered fragments before live fragments.
-- Recording streams are motion-event bounded with a short post-event tail and graceful `isLast` packet closeout.
+## How the live view works
+
+| HomeKit request | Pipeline | Cost on the host |
+| --- | --- | --- |
+| 1280 px wide or more | Printer H.264 forwarded as is, SPS/PPS added before each keyframe | Almost none |
+| Less than 1280 px | Decoded, scaled, re-encoded with `libx264 ultrafast/zerolatency`, 1 s GOP | One 1080p decode + a small encode |
+
+- The picture appears with the first keyframe sent by the printer. The wait depends on the printer's keyframe interval (on average half of it); ffmpeg itself starts in a few tens of milliseconds because it does not probe the stream.
+- When forwarded, the stream keeps the printer's resolution and bitrate, whatever HomeKit requested. On a local network this is the smoothest option.
+- Only one live view runs per printer, because printers accept few RTSP connections: a second viewer takes over the stream. A session is stopped when HomeKit stops sending its RTCP reports, and HomeKit is told when the printer drops the stream.
+
+### Raspberry Pi
+
+The forwarded stream uses almost no CPU: ffmpeg only decrypts, repackages and encrypts the packets. Re-encoding (Apple Watch, remote viewing) decodes the full 1080p stream in software: it works on a Pi 4 or 5, but expect one or two busy cores while it runs.
 
 ## Development
 
 ```bash
 npm install
 npm run build
+npm run lint
 ```
 
 Then link and run Homebridge in debug mode:
