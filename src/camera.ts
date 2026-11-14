@@ -37,6 +37,14 @@ const PASSTHROUGH_MIN_WIDTH = 1280;
 const SNAPSHOT_TIMEOUT_MS = 10_000;
 /** A session whose viewer stopped sending RTCP reports for this long is considered gone. */
 const MIN_RTCP_SILENCE_MS = 5_000;
+/**
+ * Live views that can run at the same time, each with its own ffmpeg and its own RTSP connection
+ * to the printer. Three covers a Mac, an iPhone and a third screen (iPad, Apple TV). The limit
+ * is the printer rather than the Homebridge host: every viewer costs it one more RTSP connection
+ * and how many it accepts is not documented, while a forwarded stream costs ffmpeg about 2 % of
+ * one core (a re-encoded small one about 20 %, measured on an Apple Silicon Mac).
+ */
+const MAX_LIVE_VIEWS = 3;
 
 interface PreparedSession {
   socket: Socket;
@@ -51,8 +59,9 @@ interface ActiveSession {
 }
 
 /**
- * HomeKit camera of one printer. One live session at a time: printers accept few RTSP
- * connections, so a new viewer takes over the stream of the previous one.
+ * HomeKit camera of one printer. Several devices can watch at once: each live session has its own
+ * ffmpeg and its own RTSP connection to the printer, and starting, stopping or losing one never
+ * touches the others. If the printer refuses an extra connection, only that session is closed.
  *
  * A printer switched off is shown as "No Response" in the Home app: the streaming status
  * characteristics answer with a communication failure, snapshots and stream setups are refused
@@ -65,7 +74,7 @@ export class BambuCamera implements CameraStreamingDelegate {
   private readonly streamingStatuses: Characteristic[];
   private printerOn = true;
   private readonly prepared = new Map<string, PreparedSession>();
-  private active?: ActiveSession;
+  private readonly sessions = new Map<string, ActiveSession>();
   private killSnapshot?: () => void;
 
   constructor(
@@ -84,12 +93,11 @@ export class BambuCamera implements CameraStreamingDelegate {
     this.snapshots = new SnapshotCache(
       join(storagePath, `bambu-${printer.serialNumber}-snapshot.jpg`),
       (width, height) => this.captureFrame(width, height),
-      () => this.active !== undefined,
+      () => this.sessions.size > 0,
     );
 
     this.controller = new hap.CameraController({
-      // Two so that a second viewer can take over; the first session is then stopped.
-      cameraStreamCount: 2,
+      cameraStreamCount: MAX_LIVE_VIEWS,
       delegate: this,
       streamingOptions: {
         supportedCryptoSuites: [hap.SRTPCryptoSuites.AES_CM_128_HMAC_SHA1_80],
@@ -121,7 +129,7 @@ export class BambuCamera implements CameraStreamingDelegate {
       host,
       port,
       (online) => this.handlePresenceChange(online),
-      () => this.active !== undefined || this.killSnapshot !== undefined,
+      () => this.sessions.size > 0 || this.killSnapshot !== undefined,
     );
     this.presence.start();
 
@@ -202,15 +210,16 @@ export class BambuCamera implements CameraStreamingDelegate {
   shutdown(): void {
     this.presence.stop();
     this.killSnapshot?.();
-    if (this.active) {
-      clearTimeout(this.active.watchdog);
-      this.active.ffmpeg.kill();
-      closeSocket(this.active.socket);
-      this.active = undefined;
+    for (const session of this.sessions.values()) {
+      clearTimeout(session.watchdog);
+      session.ffmpeg.kill();
+      closeSocket(session.socket);
     }
-    for (const sessionId of [...this.prepared.keys()]) {
-      this.stopSession(sessionId);
+    this.sessions.clear();
+    for (const prepared of this.prepared.values()) {
+      closeSocket(prepared.socket);
     }
+    this.prepared.clear();
   }
 
   private async startStream(request: StartStreamRequest): Promise<void> {
@@ -219,32 +228,33 @@ export class BambuCamera implements CameraStreamingDelegate {
     if (!prepared) {
       throw new Error(`Unknown streaming session ${sessionId}.`);
     }
-    this.prepared.delete(sessionId);
-
-    for (const otherId of [...this.prepared.keys()]) {
-      this.stopSession(otherId);
-    }
-    if (this.active) {
-      this.stopSession(this.active.id);
-    }
+    // A snapshot capture holds an RTSP connection too: free it for the live view.
     this.killSnapshot?.();
 
     const caps = await probeCapabilities(this.printer.ffmpegPath);
+    if (this.prepared.get(sessionId) !== prepared) {
+      // Stopped (or Homebridge shut down) while the capabilities were probed.
+      throw new Error(`Streaming session ${sessionId} was stopped.`);
+    }
+    this.prepared.delete(sessionId);
+
     const target: SrtpTarget = { ...prepared.target, payloadType: request.video.pt, mtu: request.video.mtu };
     const args = request.video.width >= PASSTHROUGH_MIN_WIDTH
       ? passthroughArgs(this.printer.streamUrl, caps, target)
       : transcodeArgs(this.printer.streamUrl, caps, this.transcodeOptions(request), target);
 
     const ffmpeg = new FfmpegProcess(this.printer.ffmpegPath, args, () => {
-      // ffmpeg ended on its own (printer switched off, stream dropped): tell HomeKit,
-      // then check whether the printer is still there.
-      if (this.active?.id === sessionId) {
+      // ffmpeg ended on its own (printer switched off, stream dropped, extra connection
+      // refused): close this session in HomeKit, then check whether the printer is still
+      // there. While other sessions run, they prove it is on and no probe is made.
+      // (A session stopped from our side never gets here: `stop()` silences this callback.)
+      if (this.sessions.has(sessionId)) {
         this.forceStop(sessionId);
         void this.presence.check(0);
       }
     });
     const session: ActiveSession = { id: sessionId, socket: prepared.socket, ffmpeg };
-    this.active = session;
+    this.sessions.set(sessionId, session);
 
     // HomeKit sends RTCP reports while the viewer is watching. If they stop without a STOP
     // request (app killed, network lost), release the printer's RTSP connection.
@@ -252,7 +262,7 @@ export class BambuCamera implements CameraStreamingDelegate {
     prepared.socket.on('message', () => {
       clearTimeout(session.watchdog);
       session.watchdog = setTimeout(() => {
-        if (this.active === session) {
+        if (this.sessions.get(sessionId) === session) {
           this.forceStop(sessionId);
         }
       }, silenceMs);
@@ -294,9 +304,9 @@ export class BambuCamera implements CameraStreamingDelegate {
       closeSocket(prepared.socket);
     }
 
-    if (this.active?.id === sessionId) {
-      const session = this.active;
-      this.active = undefined;
+    const session = this.sessions.get(sessionId);
+    if (session) {
+      this.sessions.delete(sessionId);
       clearTimeout(session.watchdog);
       session.ffmpeg.stop();
       closeSocket(session.socket);
