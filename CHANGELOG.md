@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- Several devices can watch the live view at the same time (up to three, for example a Mac, an iPhone and an iPad) instead of the new viewer stopping the previous one. Each viewer gets its own ffmpeg and its own RTSP connection to the printer; how many connections the printer accepts is not documented. Stopping a viewer, its RTCP reports stopping or its ffmpeg ending (an extra connection refused by the printer, for example) closes only that viewer's session, and the printer is not considered off while another session is running. Snapshots are still not captured while any live view is open, and a printer switched off during several live views closes all of them and shows "No Response".
+
+### Fixed
+
+- A live view stopped by HomeKit while ffmpeg was being prepared no longer leaves an ffmpeg running.
+
 ## [2.0.0] - 2026-11-14
 
 The plugin is now camera-only and built for a smooth, low-latency live view, including on a Raspberry Pi.

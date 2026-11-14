@@ -21,7 +21,8 @@ Homebridge plugin that exposes the camera of one or more **Bambu Lab printers** 
 - One HomeKit camera per printer, configured from the Homebridge settings UI.
 - **Low-latency live view**: at 1280 px and wider, the printer's own H.264 stream is forwarded to HomeKit as is (`-c:v copy`), with no decoding or re-encoding. The Homebridge host barely uses any CPU, which keeps the stream smooth on a Raspberry Pi.
 - **Small resolutions** (Apple Watch, remote viewing on a slow connection) are re-encoded to the size and bitrate HomeKit asks for, with `libx264` tuned for zero latency.
-- **Snapshots** for the Home app tiles: the last snapshot is returned instantly and refreshed in the background when older than 60 seconds. While a live view is open, the cached snapshot is served instead of opening a second connection to the printer.
+- **Several viewers at once**: up to three devices can watch the live view at the same time, as far as the printer accepts the extra RTSP connections (see below).
+- **Snapshots** for the Home app tiles: the last snapshot is returned instantly and refreshed in the background when older than 60 seconds. While a live view is open, the cached snapshot is served instead of opening one more connection to the printer.
 - **Printer switched off**: the camera shows "No Response" in the Home app, and comes back by itself when the printer is switched on again (see below).
 - Silent: the plugin writes nothing to the Homebridge log.
 
@@ -72,7 +73,8 @@ Options from version 1.x (MQTT, light, print switch, speed, HKSV, motion detecti
 
 - The picture appears with the first keyframe sent by the printer. The wait depends on the printer's keyframe interval (on average half of it); ffmpeg itself starts in a few tens of milliseconds because it does not probe the stream.
 - When forwarded, the stream keeps the printer's resolution and bitrate, whatever HomeKit requested. On a local network this is the smoothest option.
-- Only one live view runs per printer, because printers accept few RTSP connections: a second viewer takes over the stream. A session is stopped when HomeKit stops sending its RTCP reports, and HomeKit is told when the printer drops the stream.
+- Up to three devices can watch at the same time (for example a Mac, an iPhone and an iPad), each with its own ffmpeg and its own RTSP connection to the printer. How many connections the printer really accepts is not documented: if it refuses one, only that device's live view is closed and the others keep running.
+- A session is stopped when HomeKit stops sending its RTCP reports, and HomeKit is told when the printer drops the stream. Each session is handled on its own: stopping or losing one never touches the others.
 
 ## Printer switched off
 
