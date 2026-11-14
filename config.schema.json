@@ -15,7 +15,7 @@
       },
       "printers": {
         "title": "Printers",
-        "description": "Configured Bambu printers managed by this platform.",
+        "description": "Bambu printers to expose as HomeKit cameras.",
         "type": "array",
         "default": [],
         "items": {
@@ -25,13 +25,13 @@
           "properties": {
             "name": {
               "title": "Printer Name",
-              "description": "Display name used for this printer's HomeKit accessories.",
+              "description": "Printer name. The camera is named \"<name> Camera\" unless a camera name is set.",
               "type": "string",
               "placeholder": "Office Printer"
             },
             "model": {
               "title": "Printer Model",
-              "description": "Select the Bambu printer model for Accessory Information metadata.",
+              "description": "Printer model, shown in the accessory information in HomeKit.",
               "type": "string",
               "oneOf": [
                 { "title": "A1", "enum": ["A1"] },
@@ -51,139 +51,36 @@
             },
             "ipAddress": {
               "title": "Printer IP Address",
-              "description": "Local IP address of this Bambu printer.",
+              "description": "Local IP address of the printer.",
               "type": "string",
               "placeholder": "192.168.1.50"
             },
             "serialNumber": {
               "title": "Printer Serial Number",
-              "description": "Printer serial number used in MQTT topics.",
+              "description": "Printer serial number. It identifies the camera in HomeKit: changing it creates a new camera.",
               "type": "string"
             },
             "lanAccessCode": {
               "title": "LAN Access Code",
-              "description": "LAN-only access code from the printer's network settings.",
+              "description": "LAN access code from the printer's network settings, used as the RTSP password.",
               "type": "string"
-            },
-            "mqttPort": {
-              "title": "MQTT Port",
-              "description": "MQTT broker port exposed by the printer.",
-              "type": "integer",
-              "default": 8883,
-              "minimum": 1,
-              "maximum": 65535
-            },
-            "mqttUsername": {
-              "title": "MQTT Username",
-              "description": "MQTT username for printer authentication.",
-              "type": "string",
-              "default": "bblp"
-            },
-            "rejectUnauthorized": {
-              "title": "Verify TLS Certificate",
-              "description": "Enable strict TLS certificate validation. Keep disabled for most local printer certificates.",
-              "type": "boolean",
-              "default": false
-            },
-            "enableSpeedControl": {
-              "title": "Enable Print Speed Control",
-              "description": "Adds a HomeKit slider accessory to set the print speed profile.",
-              "type": "boolean",
-              "default": false
-            },
-            "enablePrintSwitch": {
-              "title": "Enable Print Switch",
-              "description": "Adds a HomeKit switch accessory showing the active print. Disable to hide it from HomeKit.",
-              "type": "boolean",
-              "default": true
-            },
-            "enableChamberLight": {
-              "title": "Enable Chamber Light Control",
-              "description": "Adds a HomeKit lightbulb accessory to toggle the chamber light. Disable to hide it from HomeKit.",
-              "type": "boolean",
-              "default": true
-            },
-            "enableCamera": {
-              "title": "Enable Camera Accessory",
-              "description": "Adds a HomeKit camera accessory. Enable this only when the printer has a reachable LAN camera stream, or provide a custom camera URL.",
-              "type": "boolean",
-              "default": false
             },
             "cameraName": {
               "title": "Camera Accessory Name",
-              "description": "Optional override for the camera accessory display name.",
+              "description": "Optional camera name in HomeKit.",
               "type": "string"
             },
             "cameraRtspUrl": {
               "title": "Camera Stream URL",
-              "description": "Optional custom camera URL. Leave empty to use the default Bambu RTSPS endpoint when the camera accessory is enabled.",
+              "description": "Optional custom stream URL. Leave empty to use the printer's RTSPS stream on port 322.",
               "type": "string",
               "placeholder": "rtsps://bblp:lanAccessCode@192.168.1.50:322/streaming/live/1"
             },
             "ffmpegPath": {
               "title": "ffmpeg Path",
-              "description": "Path to the ffmpeg binary used for snapshots and stream relay.",
+              "description": "Path to the ffmpeg binary.",
               "type": "string",
               "default": "ffmpeg"
-            },
-            "cameraVideoCodec": {
-              "title": "Camera Video Encoder",
-              "description": "Encoder for the HomeKit live stream. Use h264_videotoolbox on macOS for hardware encoding, or libx264 for software encoding.",
-              "type": "string",
-              "oneOf": [
-                {
-                  "title": "h264_videotoolbox (hardware, macOS)",
-                  "enum": ["h264_videotoolbox"]
-                },
-                {
-                  "title": "libx264 (software)",
-                  "enum": ["libx264"]
-                }
-              ]
-            },
-            "enableHksv": {
-              "title": "Enable HomeKit Secure Video",
-              "description": "Enables HKSV recording management services for iCloud event recording.",
-              "type": "boolean",
-              "default": false
-            },
-            "enableLocalMotionDetection": {
-              "title": "Enable Local Motion Detection",
-              "description": "Runs local frame-difference motion detection and publishes Motion Sensor events.",
-              "type": "boolean",
-              "default": false
-            },
-            "motionSensitivity": {
-              "title": "Motion Sensitivity",
-              "description": "Higher values detect smaller motion changes. Range 1-100.",
-              "type": "integer",
-              "default": 40,
-              "minimum": 1,
-              "maximum": 100
-            },
-            "hksvPrebufferLengthMs": {
-              "title": "HKSV Prebuffer (ms)",
-              "description": "Prebuffer duration advertised to HomeKit Secure Video.",
-              "type": "integer",
-              "default": 4000,
-              "minimum": 4000,
-              "maximum": 8000
-            },
-            "hksvFragmentLengthMs": {
-              "title": "HKSV Fragment Length (ms)",
-              "description": "Fragment length for HKSV fMP4 chunks.",
-              "type": "integer",
-              "default": 4000,
-              "minimum": 2000,
-              "maximum": 8000
-            },
-            "hksvMaxRecordingSeconds": {
-              "title": "HKSV Max Recording Seconds",
-              "description": "Upper limit for a single recording stream when an event is active.",
-              "type": "integer",
-              "default": 20,
-              "minimum": 5,
-              "maximum": 120
             }
           }
         }

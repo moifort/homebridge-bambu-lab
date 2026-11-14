@@ -4,7 +4,7 @@
   "type": "module",
   "version": "1.2.4",
   "private": false,
-  "description": "Homebridge plugin to control one or more Bambu Lab printers over local MQTT.",
+  "description": "Homebridge plugin exposing the camera of Bambu Lab printers to HomeKit, with low-latency live view.",
   "author": "Thibaut Mottet",
   "license": "Apache-2.0",
   "homepage": "https://github.com/moifort/homebridge-bambu-lab#readme",
@@ -19,8 +19,11 @@
     "homebridge-plugin",
     "bambu",
     "bambu-lab",
-    "mqtt",
-    "printer"
+    "printer",
+    "camera",
+    "homekit",
+    "rtsp",
+    "ffmpeg"
   ],
   "main": "dist/index.js",
   "engines": {
@@ -34,10 +37,6 @@
     "release": "npm version patch && git push --follow-tags",
     "dev": "npm run build && npm run lint && sudo hb-service restart",
     "watch": "npm run build && npm link && nodemon"
-  },
-  "dependencies": {
-    "homebridge-lib": "^7.1.12",
-    "mqtt": "^5.14.1"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",
