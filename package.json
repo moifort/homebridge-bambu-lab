@@ -2,7 +2,7 @@
   "name": "@moifort/homebridge-bambu-lab",
   "displayName": "Homebridge Bambu Plugin",
   "type": "module",
-  "version": "1.2.4",
+  "version": "2.0.0",
   "private": false,
   "description": "Homebridge plugin exposing the camera of Bambu Lab printers to HomeKit, with low-latency live view.",
   "author": "Thibaut Mottet",
