@@ -15,7 +15,8 @@ The plugin is now camera-only and built for a smooth, low-latency live view, inc
 - **Breaking:** the live view at 1280 px and wider forwards the printer's H.264 stream as is instead of decoding and re-encoding it on the Homebridge host. Measured with a local printer emulator (1080p30, 1 s keyframe interval): steady latency 300 ms → 35 ms, ffmpeg CPU time divided by about 8, first image 1.5 s → 0.55 s on average. The stream keeps the printer's resolution and bitrate.
 - Smaller resolutions (Apple Watch, remote viewing) are re-encoded to the requested size, frame rate and bitrate with `libx264` (`ultrafast`, `zerolatency`), two decoder threads, a 1 s keyframe interval and a 1 s rate-control buffer: about 100 ms of latency instead of 300 ms. `libx264` is now used on macOS too: `h264_videotoolbox` added about 300 ms.
 - ffmpeg no longer probes the RTSP stream before starting (`-probesize 32 -analyzeduration 0`), which saved about one second before the first image.
-- Snapshots are no longer captured while a live view is open: the cached snapshot is served, so the printer never sees two RTSP connections. After a failed capture (printer off), the next attempt waits 30 s, doubling up to 5 minutes.
+- **Breaking:** a printer switched off is shown as "No Response" in the Home app instead of serving the cached snapshot (behavior of 1.2.1). Without MQTT, the plugin checks that the printer is on by opening a TCP connection to its RTSP port every 30 s and before snapshot and stream requests (result cached 10 s, 3 s while off). While the printer is off, the camera's streaming status answers with a communication failure, snapshots and stream setups are refused at once, no ffmpeg is started and nothing is logged. The camera comes back by itself, with a fresh snapshot, when the printer is switched on again.
+- Snapshots are no longer captured while a live view is open: the cached snapshot is served, so the printer never sees two RTSP connections. If a capture fails while the printer's port is open, the next attempt waits 30 s, doubling up to 5 minutes.
 - Fewer advertised resolutions (16:9 only, plus 320×240 for Apple Watch) and two stream slots instead of six.
 
 ### Removed
@@ -28,7 +29,7 @@ The plugin is now camera-only and built for a smooth, low-latency live view, inc
 ### Fixed
 
 - The camera works with ffmpeg 8 and later, which verify TLS certificates by default and rejected the printer's self-signed certificate. TLS verification is turned off when the installed ffmpeg supports the option.
-- A live view no longer stays open forever: ffmpeg gives up after 5 s without data from the printer, HomeKit is told when the stream ends on its own, a session whose viewer disappeared without stopping it (no RTCP reports for 5 s) is closed, ffmpeg is killed if it ignores SIGTERM for 2 s, and every ffmpeg is stopped when Homebridge shuts down.
+- A live view no longer stays open forever: ffmpeg gives up after 5 s without data from the printer, HomeKit is told when the stream ends on its own, a session whose viewer disappeared without stopping it (no RTCP reports for 5 s) is closed, ffmpeg is killed if it ignores SIGTERM for 2 s, and every ffmpeg is stopped when Homebridge shuts down. A printer switched off during a live view closes the session in HomeKit about 5 s later.
 
 ## [1.2.4] - 2026-10-21
 

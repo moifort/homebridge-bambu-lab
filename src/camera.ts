@@ -4,6 +4,7 @@ import { join } from 'node:path';
 
 import type {
   API,
+  Characteristic,
   CameraController,
   CameraStreamingDelegate,
   PlatformAccessory,
@@ -20,6 +21,7 @@ import type { PrinterConfig } from './config.js';
 import { passthroughArgs, snapshotArgs, transcodeArgs, type SrtpTarget, type TranscodeOptions } from './ffmpegArgs.js';
 import { probeCapabilities } from './ffmpegCapabilities.js';
 import { FfmpegProcess, runForOutput } from './ffmpegProcess.js';
+import { PrinterPresence, rtspEndpoint } from './printerPresence.js';
 import { SnapshotCache } from './snapshotCache.js';
 
 function closeSocket(socket: Socket): void {
@@ -51,10 +53,17 @@ interface ActiveSession {
 /**
  * HomeKit camera of one printer. One live session at a time: printers accept few RTSP
  * connections, so a new viewer takes over the stream of the previous one.
+ *
+ * A printer switched off is shown as "No Response" in the Home app: the streaming status
+ * characteristics answer with a communication failure, snapshots and stream setups are refused
+ * at once. HAP-NodeJS reports these errors at debug level only, so nothing reaches the log.
  */
 export class BambuCamera implements CameraStreamingDelegate {
   private readonly controller: CameraController;
   private readonly snapshots: SnapshotCache;
+  private readonly presence: PrinterPresence;
+  private readonly streamingStatuses: Characteristic[];
+  private printerOn = true;
   private readonly prepared = new Map<string, PreparedSession>();
   private active?: ActiveSession;
   private killSnapshot?: () => void;
@@ -103,6 +112,18 @@ export class BambuCamera implements CameraStreamingDelegate {
       },
     });
     accessory.configureController(this.controller);
+    this.streamingStatuses = accessory.services
+      .filter((service) => service.UUID === hap.Service.CameraRTPStreamManagement.UUID)
+      .map((service) => service.getCharacteristic(hap.Characteristic.StreamingStatus));
+
+    const { host, port } = rtspEndpoint(printer.streamUrl);
+    this.presence = new PrinterPresence(
+      host,
+      port,
+      (online) => this.handlePresenceChange(online),
+      () => this.active !== undefined || this.killSnapshot !== undefined,
+    );
+    this.presence.start();
 
     // Warm the cache so the first stream does not wait for it.
     void probeCapabilities(printer.ffmpegPath);
@@ -111,13 +132,30 @@ export class BambuCamera implements CameraStreamingDelegate {
   handleSnapshotRequest(request: SnapshotRequest, callback: SnapshotRequestCallback): void {
     const width = request.width > 0 ? request.width : 1280;
     const height = request.height > 0 ? request.height : 720;
-    this.snapshots.get(width, height).then(
-      (image) => callback(undefined, image),
-      (error: Error) => callback(error),
-    );
+    this.presence.check()
+      .then((online) => {
+        if (!online) {
+          throw new Error('Printer is switched off.');
+        }
+        return this.snapshots.get(width, height);
+      })
+      .then(
+        (image) => callback(undefined, image),
+        (error: Error) => callback(error),
+      );
   }
 
   prepareStream(request: PrepareStreamRequest, callback: PrepareStreamCallback): void {
+    this.presence.check().then((online) => {
+      if (online) {
+        this.prepareSession(request, callback);
+      } else {
+        callback(new Error('Printer is switched off.'));
+      }
+    });
+  }
+
+  private prepareSession(request: PrepareStreamRequest, callback: PrepareStreamCallback): void {
     const socket = createSocket(request.addressVersion === 'ipv6' ? 'udp6' : 'udp4');
     socket.once('error', (error) => {
       socket.close();
@@ -162,6 +200,7 @@ export class BambuCamera implements CameraStreamingDelegate {
 
   /** Homebridge is shutting down: no ffmpeg may outlive it. */
   shutdown(): void {
+    this.presence.stop();
     this.killSnapshot?.();
     if (this.active) {
       clearTimeout(this.active.watchdog);
@@ -197,10 +236,11 @@ export class BambuCamera implements CameraStreamingDelegate {
       : transcodeArgs(this.printer.streamUrl, caps, this.transcodeOptions(request), target);
 
     const ffmpeg = new FfmpegProcess(this.printer.ffmpegPath, args, () => {
-      // ffmpeg ended on its own (printer unreachable, stream dropped): tell HomeKit.
+      // ffmpeg ended on its own (printer switched off, stream dropped): tell HomeKit,
+      // then check whether the printer is still there.
       if (this.active?.id === sessionId) {
-        this.stopSession(sessionId);
-        this.controller.forceStopStreamingSession(sessionId);
+        this.forceStop(sessionId);
+        void this.presence.check(0);
       }
     });
     const session: ActiveSession = { id: sessionId, socket: prepared.socket, ffmpeg };
@@ -213,11 +253,38 @@ export class BambuCamera implements CameraStreamingDelegate {
       clearTimeout(session.watchdog);
       session.watchdog = setTimeout(() => {
         if (this.active === session) {
-          this.stopSession(sessionId);
-          this.controller.forceStopStreamingSession(sessionId);
+          this.forceStop(sessionId);
         }
       }, silenceMs);
     });
+  }
+
+  /** Ends a session from our side and closes it in HomeKit. */
+  private forceStop(sessionId: string): void {
+    this.stopSession(sessionId);
+    this.controller.forceStopStreamingSession(sessionId);
+    // HAP resets the streaming status when it closes the session.
+    this.applyReachability();
+  }
+
+  private handlePresenceChange(online: boolean): void {
+    const wasOff = !this.printerOn;
+    this.printerOn = online;
+    this.applyReachability();
+    if (online && wasOff) {
+      this.snapshots.refreshAfterReconnect();
+    }
+  }
+
+  /** "No Response" in the Home app while the printer is off; normal status again when it is back. */
+  private applyReachability(): void {
+    for (const status of this.streamingStatuses) {
+      if (this.printerOn) {
+        status.updateValue(status.value);
+      } else {
+        status.updateValue(new this.api.hap.HapStatusError(this.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE));
+      }
+    }
   }
 
   private stopSession(sessionId: string): void {

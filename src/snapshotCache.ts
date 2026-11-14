@@ -16,6 +16,8 @@ export class SnapshotCache {
   private inFlight?: Promise<Buffer>;
   private failures = 0;
   private retryAt = 0;
+  private lastWidth = 1280;
+  private lastHeight = 720;
 
   constructor(
     private readonly filePath: string,
@@ -25,6 +27,8 @@ export class SnapshotCache {
   ) {}
 
   async get(width: number, height: number): Promise<Buffer> {
+    this.lastWidth = width;
+    this.lastHeight = height;
     const cached = await this.readCached();
     if (cached) {
       if (cached.ageMs >= MAX_AGE_MS) {
@@ -35,6 +39,15 @@ export class SnapshotCache {
       return cached.image;
     }
     return this.refresh(width, height);
+  }
+
+  /** The printer was switched back on: forget past failures and capture a fresh image. */
+  refreshAfterReconnect(): void {
+    this.failures = 0;
+    this.retryAt = 0;
+    this.refresh(this.lastWidth, this.lastHeight).catch(() => {
+      // retried on the next request
+    });
   }
 
   private refresh(width: number, height: number): Promise<Buffer> {

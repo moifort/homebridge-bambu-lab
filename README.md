@@ -21,7 +21,8 @@ Homebridge plugin that exposes the camera of one or more **Bambu Lab printers** 
 - One HomeKit camera per printer, configured from the Homebridge settings UI.
 - **Low-latency live view**: at 1280 px and wider, the printer's own H.264 stream is forwarded to HomeKit as is (`-c:v copy`), with no decoding or re-encoding. The Homebridge host barely uses any CPU, which keeps the stream smooth on a Raspberry Pi.
 - **Small resolutions** (Apple Watch, remote viewing on a slow connection) are re-encoded to the size and bitrate HomeKit asks for, with `libx264` tuned for zero latency.
-- **Snapshots** for the Home app tiles: the last snapshot is returned instantly and refreshed in the background when older than 60 seconds. While a live view is open, the cached snapshot is served instead of opening a second connection to the printer. When the printer is off, capture attempts back off (30 s up to 5 minutes).
+- **Snapshots** for the Home app tiles: the last snapshot is returned instantly and refreshed in the background when older than 60 seconds. While a live view is open, the cached snapshot is served instead of opening a second connection to the printer.
+- **Printer switched off**: the camera shows "No Response" in the Home app, and comes back by itself when the printer is switched on again (see below).
 - Silent: the plugin writes nothing to the Homebridge log.
 
 ## Requirements
@@ -73,7 +74,19 @@ Options from version 1.x (MQTT, light, print switch, speed, HKSV, motion detecti
 - When forwarded, the stream keeps the printer's resolution and bitrate, whatever HomeKit requested. On a local network this is the smoothest option.
 - Only one live view runs per printer, because printers accept few RTSP connections: a second viewer takes over the stream. A session is stopped when HomeKit stops sending its RTCP reports, and HomeKit is told when the printer drops the stream.
 
-### Raspberry Pi
+## Printer switched off
+
+Switching the printer off at the plug is a normal state, not an error: nothing is logged and no ffmpeg is started for it.
+
+- The plugin knows whether the printer is on by opening a TCP connection to its RTSP port (322, or the host and port of `cameraRtspUrl`) and closing it at once: every 30 seconds, and when HomeKit asks for a snapshot or a stream if the last check is older than 10 seconds (3 seconds while the printer is off). No check runs while ffmpeg is connected to the printer.
+- While the printer is off, the camera answers HomeKit with a communication failure (`SERVICE_COMMUNICATION_FAILURE` on its streaming status), so the Home app shows "No Response" instead of an old picture. Snapshot and stream requests are refused at once.
+- If the printer is switched off during a live view, ffmpeg stops after 5 seconds without data and the session is closed in HomeKit.
+- When the printer is back, the camera becomes available again within 30 seconds (sooner if the Home app is open) and a fresh snapshot is captured, without restarting Homebridge.
+- A printer that is on but with LAN live view disabled (port 322 closed) is shown as off too.
+
+Homebridge 2 can publish accessories over Matter, but only those created with its Matter API, and it has no camera device type: the camera stays a HomeKit (HAP) accessory.
+
+## Raspberry Pi
 
 The forwarded stream uses almost no CPU: ffmpeg only decrypts, repackages and encrypts the packets. Re-encoding (Apple Watch, remote viewing) decodes the full 1080p stream in software: it works on a Pi 4 or 5, but expect one or two busy cores while it runs.
 
