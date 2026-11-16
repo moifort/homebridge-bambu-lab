@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.1] - 2026-11-16
+
 ### Fixed
 
 - The live view no longer gets slower and slower to start, then frozen, the longer the printer stays on. Every connection accepted by the printer's RTSP server slows it down until the printer is restarted, even a connection closed at once, and the plugin opened one every 30 seconds to know whether the printer was on. Measured on an X2D after 20 hours: 1.5 s per RTSP request instead of 50 ms, 16 s before the first image instead of 0.8 s, and one keyframe every 1 to 2 s instead of 30 frames per second. The RTSP port is now asked once when the printer appears; after that the plugin asks port 9, which a powered printer refuses at once without any server seeing the connection. The RTSP port is asked again when the printer comes back and when ffmpeg could not read the stream. A printer already slowed down must be restarted once.
