@@ -246,11 +246,12 @@ export class BambuCamera implements CameraStreamingDelegate {
     const ffmpeg = new FfmpegProcess(this.printer.ffmpegPath, args, () => {
       // ffmpeg ended on its own (printer switched off, stream dropped, extra connection
       // refused): close this session in HomeKit, then check whether the printer is still
-      // there. While other sessions run, they prove it is on and no probe is made.
+      // there and still serves its stream. While other sessions run, they prove it is on and
+      // no probe is made.
       // (A session stopped from our side never gets here: `stop()` silences this callback.)
       if (this.sessions.has(sessionId)) {
         this.forceStop(sessionId);
-        void this.presence.check(0);
+        void this.presence.recheck();
       }
     });
     const session: ActiveSession = { id: sessionId, socket: prepared.socket, ffmpeg };
@@ -329,13 +330,28 @@ export class BambuCamera implements CameraStreamingDelegate {
   private async captureFrame(width: number, height: number): Promise<Buffer> {
     const caps = await probeCapabilities(this.printer.ffmpegPath);
     const run = runForOutput(this.printer.ffmpegPath, snapshotArgs(this.printer.streamUrl, caps, width, height), SNAPSHOT_TIMEOUT_MS);
-    this.killSnapshot = run.kill;
-    try {
-      return await run.result;
-    } finally {
-      if (this.killSnapshot === run.kill) {
+    let killedByUs = false;
+    const kill = () => {
+      killedByUs = true;
+      run.kill();
+    };
+    this.killSnapshot = kill;
+    const release = () => {
+      if (this.killSnapshot === kill) {
         this.killSnapshot = undefined;
       }
+    };
+    try {
+      const image = await run.result;
+      release();
+      return image;
+    } catch (error) {
+      release();
+      if (!killedByUs) {
+        // The stream could not be read (LAN live view turned off, printer switched off).
+        void this.presence.recheck();
+      }
+      throw error;
     }
   }
 }

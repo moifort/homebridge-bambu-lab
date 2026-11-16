@@ -80,11 +80,14 @@ Options from version 1.x (MQTT, light, print switch, speed, HKSV, motion detecti
 
 Switching the printer off at the plug is a normal state, not an error: nothing is logged and no ffmpeg is started for it.
 
-- The plugin knows whether the printer is on by opening a TCP connection to its RTSP port (322, or the host and port of `cameraRtspUrl`) and closing it at once: every 30 seconds, and when HomeKit asks for a snapshot or a stream if the last check is older than 10 seconds (3 seconds while the printer is off). No check runs while ffmpeg is connected to the printer.
+- The plugin checks whether the printer is on every 30 seconds, and when HomeKit asks for a snapshot or a stream if the last check is older than 10 seconds (3 seconds while the printer is off). No check runs while ffmpeg is connected to the printer.
+- The check spares the printer's RTSP server. Every connection that server accepts slows it down until the printer is restarted, even a connection closed at once (measured on an X2D: about 0.6 ms more on every later RTSP request, so 1.5 s per request after 20 hours of one connection every 30 seconds, a live view that needed 16 s to start and one frame every 2 s). The RTSP port (322, or the host and port of `cameraRtspUrl`) is therefore asked once when the printer appears. After that the plugin opens a TCP connection to port 9, on which the printer runs nothing: a powered printer refuses it at once and no server sees it. The RTSP port is asked again when the printer comes back, and when ffmpeg could not read the stream.
+- A host that does not refuse port 9 (a firewall dropping the connection, for example in front of an RTSP bridge) is checked on its RTSP port every time, as in 2.1.
+- Snapshots and live views still open one RTSP connection each. If the live view gets slow to start after a long time without switching the printer off, restart the printer.
 - While the printer is off, the camera answers HomeKit with a communication failure (`SERVICE_COMMUNICATION_FAILURE` on its streaming status), so the Home app shows "No Response" instead of an old picture. Snapshot and stream requests are refused at once.
 - If the printer is switched off during a live view, ffmpeg stops after 5 seconds without data and the session is closed in HomeKit.
 - When the printer is back, the camera becomes available again within 30 seconds (sooner if the Home app is open) and a fresh snapshot is captured, without restarting Homebridge.
-- A printer that is on but with LAN live view disabled (port 322 closed) is shown as off too.
+- A printer that is on but with LAN live view disabled (port 322 closed) is shown as off too. If LAN live view is turned off while the printer stays on, the camera is shown as off after the next snapshot or live view that fails.
 
 Homebridge 2 can publish accessories over Matter, but only those created with its Matter API, and it has no camera device type: the camera stays a HomeKit (HAP) accessory.
 
