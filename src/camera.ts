@@ -277,15 +277,18 @@ export class BambuCamera implements CameraStreamingDelegate {
 
     // HomeKit sends RTCP reports while the viewer is watching. If they stop without a STOP
     // request (app killed, network lost), release the printer's RTSP connection.
+    // Armed at once, so a viewer gone before its first report is released too.
     const silenceMs = Math.max(MIN_RTCP_SILENCE_MS, request.video.rtcp_interval * 10 * 1000);
-    prepared.socket.on('message', () => {
+    const armWatchdog = () => {
       clearTimeout(session.watchdog);
       session.watchdog = setTimeout(() => {
         if (this.sessions.get(sessionId) === session) {
           this.forceStop(sessionId);
         }
       }, silenceMs);
-    });
+    };
+    armWatchdog();
+    prepared.socket.on('message', armWatchdog);
   }
 
   /** Ends a session from our side and closes it in HomeKit. */
