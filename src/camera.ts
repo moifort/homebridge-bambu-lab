@@ -7,6 +7,7 @@ import type {
   Characteristic,
   CameraController,
   CameraStreamingDelegate,
+  Logging,
   PlatformAccessory,
   PrepareStreamCallback,
   PrepareStreamRequest,
@@ -82,8 +83,11 @@ export class BambuCamera implements CameraStreamingDelegate {
     accessory: PlatformAccessory,
     private readonly printer: PrinterConfig,
     storagePath: string,
+    private readonly log: Logging,
   ) {
     const { hap } = api;
+    // Parsed first: the config was checked, but nothing may be configured from a URL that does not parse.
+    const { host, port } = rtspEndpoint(printer.streamUrl);
 
     accessory.getService(hap.Service.AccessoryInformation)!
       .setCharacteristic(hap.Characteristic.Manufacturer, 'Bambu Lab')
@@ -91,7 +95,7 @@ export class BambuCamera implements CameraStreamingDelegate {
       .setCharacteristic(hap.Characteristic.SerialNumber, printer.serialNumber);
 
     this.snapshots = new SnapshotCache(
-      join(storagePath, `bambu-${printer.serialNumber}-snapshot.jpg`),
+      join(storagePath, printer.snapshotFile),
       () => this.captureFrame(),
       () => this.sessions.size > 0,
     );
@@ -124,7 +128,6 @@ export class BambuCamera implements CameraStreamingDelegate {
       .filter((service) => service.UUID === hap.Service.CameraRTPStreamManagement.UUID)
       .map((service) => service.getCharacteristic(hap.Characteristic.StreamingStatus));
 
-    const { host, port } = rtspEndpoint(printer.streamUrl);
     this.presence = new PrinterPresence(
       host,
       port,
