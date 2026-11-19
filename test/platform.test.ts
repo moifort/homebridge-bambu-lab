@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 
-import type { API, Logging, PlatformAccessory, PlatformConfig } from 'homebridge';
+import type { API, Logging, PlatformAccessory } from 'homebridge';
 
 import { BambuPlatform } from '../src/platform.js';
 
@@ -43,7 +43,7 @@ function fakeHomebridge(config: Record<string, unknown>, cachedSerials: string[]
     },
   } as unknown as API;
 
-  const platform = new BambuPlatform(log, { platform: 'Homebridge Bambu Plugin', ...config } as PlatformConfig, api);
+  const platform = new BambuPlatform(log, { platform: 'Homebridge Bambu Plugin', ...config }, api);
   for (const serialNumber of cachedSerials) {
     platform.configureAccessory({ UUID: uuidOf(serialNumber), displayName: serialNumber } as unknown as PlatformAccessory);
   }

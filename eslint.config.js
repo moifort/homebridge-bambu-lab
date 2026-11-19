@@ -28,8 +28,26 @@ export default tseslint.config(
     languageOptions: {
       ecmaVersion: 2022,
       sourceType: 'module',
+      parserOptions: {
+        projectService: true,
+        tsconfigRootDir: import.meta.dirname,
+      },
     },
   },
   eslint.configs.recommended,
-  ...tseslint.configs.recommended,
+  ...tseslint.configs.recommendedTypeChecked,
+  {
+    rules: {
+      '@typescript-eslint/no-floating-promises': ['error', {
+        // node:test runs the suites itself: their returned promises need no await.
+        allowForKnownSafeCalls: [{ from: 'package', package: 'node:test', name: ['describe', 'it', 'test', 'suite'] }],
+      }],
+      '@typescript-eslint/no-misused-promises': 'error',
+    },
+  },
+  {
+    // The config file itself is not part of the TypeScript project.
+    files: ['**/*.js'],
+    ...tseslint.configs.disableTypeChecked,
+  },
 );
