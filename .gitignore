@@ -123,7 +123,6 @@ dist
 # Webstorm
 .idea
 
-/test/hbConfig
 
 # GitShift personal account configuration
 **/github-accounts.json

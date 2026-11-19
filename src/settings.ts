@@ -1,9 +1,8 @@
 /**
- * This is the name of the platform that users will use to register the plugin in the Homebridge config.json
+ * Platform name in the Homebridge config (`"platform": "Homebridge Bambu Plugin"`). Never change it:
+ * existing configs and the cameras paired in HomeKit depend on it.
  */
 export const PLATFORM_NAME = 'Homebridge Bambu Plugin';
 
-/**
- * This must match the name of your plugin as defined the package.json `name` property
- */
+/** Must match the `name` of package.json. */
 export const PLUGIN_NAME = '@moifort/homebridge-bambu-lab';

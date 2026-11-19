@@ -5,8 +5,9 @@ Plugin Homebridge qui expose la caméra des imprimantes Bambu Lab dans HomeKit (
 ## Commandes
 
 - `npm run build` — compile (rimraf + tsc)
-- `npm run lint` — ESLint, zéro warning toléré
-- `npm run release` — bump version + push avec tags (déclenche la publication npm)
+- `npm run lint` — ESLint typé, zéro warning toléré
+- `npm test` — tests unitaires (`node:test`, compilés par `tsc` dans `.test-dist`)
+- `npm version <patch|minor|major> && git push --follow-tags` — release (déclenche la publication npm)
 
 ## Déploiement
 
@@ -18,6 +19,6 @@ Quand l'utilisateur dit « push sur ce projet » (ou équivalent), exécuter dan
 
 1. **Changelog** : déplacer le contenu de la section `[Unreleased]` de `CHANGELOG.md` vers une nouvelle section de version datée (format Keep a Changelog). Si `[Unreleased]` est vide, la remplir d'abord à partir des changements en attente.
 2. **README** : mettre à jour `README.md` si les changements ajoutent/modifient des fonctionnalités ou des options de configuration visibles par l'utilisateur.
-3. **Vérifier** : `npm run build && npm run lint` doivent passer.
+3. **Vérifier** : `npm run build && npm run lint && npm test` doivent passer.
 4. **Commit** : commiter tous les changements en attente (message conventional commits).
 5. **Version** : déterminer l'incrément selon les changements depuis la dernière version — `fix`/chore → patch, nouvelle fonctionnalité → minor, breaking change → major — puis `npm version <increment>` et `git push --follow-tags` (déclenche la publication npm automatique).
