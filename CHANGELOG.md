@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Configuration problems are now reported in the Homebridge log, once at startup: a warning for each printer that is skipped, with the reason (missing serial number, IP address or access code, invalid address or stream URL, serial number used twice), and an error when ffmpeg cannot be found or run. The access code and stream URLs are never logged.
+- In debug mode (`homebridge -D`): when the printer is seen on or off, live views started, closed or ended unexpectedly, and failed snapshots, with ffmpeg's last error lines (credentials hidden).
+- Settings form: printers shown as tabs named after the printer, camera name, stream URL and ffmpeg path in a collapsed **Advanced** section, a short header on enabling LAN Mode Liveview and where to find the access code and serial number, and readable messages for an invalid IP address, serial number, access code or stream URL.
+- `X1` in the printer models.
+- README: installation, printer setup and troubleshooting sections, and credits to the original project by trinityhades.
+- Unit tests (`npm test`, Node.js test runner), run in CI on Node 20, 22 and 24 and before publishing.
+
+### Changed
+
+- The plugin is no longer completely silent: it stays quiet in normal operation (a printer switched off is not an error), but logs configuration problems at startup and details at debug level.
+- With a custom camera stream URL (`cameraRtspUrl`, for P1 and A1 printers behind an RTSP bridge), `ipAddress` and `lanAccessCode` are no longer required.
+- `ipAddress` accepts IPv6 addresses (put between brackets in the stream URL) and host names; `cameraRtspUrl` must be an `rtsp://` or `rtsps://` URL.
+- In the settings form, no field of a printer is required and the ffmpeg path is a placeholder instead of a default written into every config. The plugin checks each entry itself.
+- Snapshots are always captured at the printer's resolution, up to 1920×1080, whatever size HomeKit asks for.
+- A live view whose viewer never sends an RTCP report is closed after 30 seconds.
+- The npm package only contains the plugin files (27 kB instead of 634 kB): no more README images or development files.
+- Dev dependencies updated (Homebridge 2.5.0 stable, ESLint 9.39, typescript-eslint 8.73) and type-checked lint rules enabled.
+
+### Fixed
+
+- A camera no longer disappears from HomeKit, with its room and automations, when its printer's entry becomes invalid (a typo, a missing value): its accessory is kept until the entry is fixed. Only cameras of printers removed from the configuration are removed.
+- A socket error after a live view was set up no longer crashes Homebridge with an uncaught exception, and HomeKit is no longer answered twice. A failure while preparing a live view now answers HomeKit instead of leaving it waiting.
+- A viewer that disappears before sending its first RTCP report no longer leaves ffmpeg and the printer's RTSP connection open forever.
+- A snapshot capture stopped by the plugin to free the printer's connection for a live view no longer counts as a failure, which delayed the next snapshot by 30 seconds up to 5 minutes.
+- A small snapshot (a Home app tile) is no longer served to full-screen requests: the cached image used to keep the size of the first request.
+- A serial number with characters that are not safe in a file name no longer ends up as is in the snapshot file name.
+
 ## [2.1.1] - 2026-11-16
 
 ### Fixed
