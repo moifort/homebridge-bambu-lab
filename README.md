@@ -7,8 +7,6 @@
 [![npm](https://img.shields.io/npm/v/%40moifort%2Fhomebridge-bambu-lab.svg)](https://www.npmjs.com/package/@moifort/homebridge-bambu-lab)
 [![npm](https://img.shields.io/npm/dt/%40moifort%2Fhomebridge-bambu-lab.svg)](https://www.npmjs.com/package/@moifort/homebridge-bambu-lab)
 [![License](https://img.shields.io/npm/l/%40moifort%2Fhomebridge-bambu-lab.svg)](https://github.com/moifort/homebridge-bambu-lab/blob/main/LICENSE)
-[![verified-by-homebridge](https://img.shields.io/badge/homebridge-verified-blueviolet?color=%23491F59&style=flat)](https://github.com/homebridge/homebridge/wiki/Verified-Plugins)
-[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee%20(Rent)-Donate-red.svg)](https://www.buymeacoffee.com/trinityhades)
 
 </span>
 
@@ -30,6 +28,20 @@ Homebridge plugin that exposes the camera of one or more **Bambu Lab printers** 
 
 - A printer that serves its camera over RTSPS on port 322 with **LAN Mode Liveview** enabled (X1 series and newer models with LAN live view). P1 and A1 printers don't provide an RTSP stream: use `cameraRtspUrl` with an external RTSP bridge for them.
 - `ffmpeg` with `libx264`, in the `PATH` of the Homebridge user or set with `ffmpegPath`. On Raspberry Pi OS, `sudo apt install ffmpeg` is enough. ffmpeg 4.x or later: the plugin checks which RTSP options the installed version supports (TLS verification, socket timeout) the first time it is used.
+- Homebridge 1.8 or later (including 2.x), on Node.js 20.18, 22.10, 24 or later.
+- The Homebridge host and the printer on the same local network, with TCP port 322 reachable.
+
+## Installation
+
+In the Homebridge UI, open **Plugins**, search for `@moifort/homebridge-bambu-lab` and install it. Or from a terminal:
+
+```bash
+npm install -g @moifort/homebridge-bambu-lab
+```
+
+If the original `homebridge-bambu-lab` plugin is installed, uninstall it first: both register the same platform name. Your existing configuration block is reused.
+
+Running the plugin as a child bridge (plugin menu → **Bridge Settings** in the Homebridge UI) is recommended, as for any camera plugin: a live view then never slows down your other accessories.
 
 ## Configuration
 
@@ -64,6 +76,12 @@ Use the Homebridge UI, or add the platform to `config.json`:
 
 Options from version 1.x (MQTT, light, print switch, speed, HKSV, motion detection, encoder) are ignored.
 
+### Where to find the values
+
+- **IP address, LAN access code and LAN Mode Liveview**: on the printer's screen, in the network settings. Turn **LAN Mode Liveview** on there (the wording changes slightly between models). Give the printer a fixed IP address in your router, otherwise the camera stops answering when the address changes.
+- **Serial number**: on the printer's screen in the device information, or in Bambu Studio and Bambu Handy in the printer's device page.
+- If you refresh the access code on the printer, update it in the plugin settings and restart Homebridge.
+
 ## How the live view works
 
 | HomeKit request | Pipeline | Cost on the host |
@@ -80,20 +98,63 @@ Options from version 1.x (MQTT, light, print switch, speed, HKSV, motion detecti
 
 Switching the printer off at the plug is a normal state, not an error: nothing is logged and no ffmpeg is started for it.
 
-- The plugin checks whether the printer is on every 30 seconds, and when HomeKit asks for a snapshot or a stream if the last check is older than 10 seconds (3 seconds while the printer is off). No check runs while ffmpeg is connected to the printer.
-- The check spares the printer's RTSP server. Every connection that server accepts slows it down until the printer is restarted, even a connection closed at once (measured on an X2D: about 0.6 ms more on every later RTSP request, so 1.5 s per request after 20 hours of one connection every 30 seconds, a live view that needed 16 s to start and one frame every 2 s). The RTSP port (322, or the host and port of `cameraRtspUrl`) is therefore asked once when the printer appears. After that the plugin opens a TCP connection to port 9, on which the printer runs nothing: a powered printer refuses it at once and no server sees it. The RTSP port is asked again when the printer comes back, and when ffmpeg could not read the stream.
-- A host that does not refuse port 9 (a firewall dropping the connection, for example in front of an RTSP bridge) is checked on its RTSP port every time, as in 2.1.
-- Snapshots and live views still open one RTSP connection each. If the live view gets slow to start after a long time without switching the printer off, restart the printer.
-- While the printer is off, the camera answers HomeKit with a communication failure (`SERVICE_COMMUNICATION_FAILURE` on its streaming status), so the Home app shows "No Response" instead of an old picture. Snapshot and stream requests are refused at once.
-- If the printer is switched off during a live view, ffmpeg stops after 5 seconds without data and the session is closed in HomeKit.
+- While the printer is off, the Home app shows "No Response" instead of an old picture. Snapshot and stream requests are refused at once.
 - When the printer is back, the camera becomes available again within 30 seconds (sooner if the Home app is open) and a fresh snapshot is captured, without restarting Homebridge.
+- If the printer is switched off during a live view, the live view is closed about 5 seconds later.
 - A printer that is on but with LAN live view disabled (port 322 closed) is shown as off too. If LAN live view is turned off while the printer stays on, the camera is shown as off after the next snapshot or live view that fails.
 
-Homebridge 2 can publish accessories over Matter, but only those created with its Matter API, and it has no camera device type: the camera stays a HomeKit (HAP) accessory.
+How the plugin knows whether the printer is on, and why it does it that way, is described in [Design notes](#design-notes).
 
 ## Raspberry Pi
 
 The forwarded stream uses almost no CPU: ffmpeg only decrypts, repackages and encrypts the packets. Re-encoding (Apple Watch, remote viewing) decodes the full 1080p stream in software: it works on a Pi 4 or 5, but expect one or two busy cores while it runs.
+
+## Troubleshooting
+
+The plugin writes nothing to the Homebridge log, so check these points by hand.
+
+**The camera shows "No Response".** The plugin cannot open the printer's stream port.
+
+- The printer is switched off, or still starting.
+- **LAN Mode Liveview** is turned off on the printer.
+- The printer's IP address changed: compare it with `ipAddress`, and reserve the address in your router.
+- A firewall or a VLAN sits between the Homebridge host and the printer. From the Homebridge host, `nc -vz <ipAddress> 322` must succeed.
+
+**The camera is there but shows no picture, or the live view never starts.** Test the stream with the same ffmpeg, as the user that runs Homebridge:
+
+```bash
+ffmpeg -rtsp_transport tcp -tls_verify 0 -i "rtsps://bblp:<lanAccessCode>@<ipAddress>:322/streaming/live/1" -frames:v 1 test.jpg
+```
+
+- `ffmpeg: command not found`: install ffmpeg, or set `ffmpegPath` to its full path.
+- `Unrecognized option 'tls_verify'`: your ffmpeg is older and does not need the option, run the command without `-tls_verify 0`.
+- `401 Unauthorized`: the LAN access code is wrong.
+- `test.jpg` is written: the stream works. Restart Homebridge and open the camera again.
+
+**The live view works on the iPhone but not on the Apple Watch or away from home.** Small resolutions are re-encoded and need `libx264`: `ffmpeg -hide_banner -encoders | grep libx264` must print a line.
+
+**The live view takes longer and longer to start.** Restart the printer: its RTSP server gets slower with every connection it has accepted since it was switched on (see [Design notes](#design-notes)).
+
+**No camera appears for a printer.** A printer without `ipAddress`, `serialNumber` or `lanAccessCode`, or with the same serial number as another one, is ignored.
+
+**A second camera appeared in HomeKit.** The serial number identifies the camera: changing it creates a new one.
+
+When you open an issue, give the printer model, the ffmpeg version (`ffmpeg -version`), the Homebridge and Node.js versions, and the result of the ffmpeg command above. Remove the access code.
+
+## Design notes
+
+How the plugin knows whether the printer is on:
+
+- It checks every 30 seconds, and when HomeKit asks for a snapshot or a stream if the last check is older than 10 seconds (3 seconds while the printer is off). No check runs while ffmpeg is connected to the printer.
+- The check spares the printer's RTSP server. Every connection that server accepts slows it down until the printer is restarted, even a connection closed at once (measured on an X2D: about 0.6 ms more on every later RTSP request, so 1.5 s per request after 20 hours of one connection every 30 seconds, a live view that needed 16 s to start and one frame every 2 s). The RTSP port (322, or the host and port of `cameraRtspUrl`) is therefore asked once when the printer appears. After that the plugin opens a TCP connection to port 9, on which the printer runs nothing: a powered printer refuses it at once and no server sees it. The RTSP port is asked again when the printer comes back, and when ffmpeg could not read the stream.
+- A host that does not refuse port 9 (a firewall dropping the connection, for example in front of an RTSP bridge) is checked on its RTSP port every time, as in 2.1.
+- Snapshots and live views still open one RTSP connection each. If the live view gets slow to start after a long time without switching the printer off, restart the printer.
+- While the printer is off, the camera answers HomeKit with a communication failure (`SERVICE_COMMUNICATION_FAILURE` on its streaming status): this is what the Home app shows as "No Response".
+- If the printer is switched off during a live view, ffmpeg stops after 5 seconds without data and the session is closed in HomeKit.
+
+The printer's certificate is self-signed, so ffmpeg does not verify it. The access code is part of the stream URL passed to ffmpeg: other users of the Homebridge host can read it in the process list.
+
+Homebridge 2 can publish accessories over Matter, but only those created with its Matter API, and it has no camera device type: the camera stays a HomeKit (HAP) accessory.
 
 ## Development
 
@@ -109,3 +170,9 @@ Then link and run Homebridge in debug mode:
 npm link
 homebridge -D
 ```
+
+## Credits
+
+This plugin started as a fork of [trinityhades/homebridge-bambu-lab](https://github.com/trinityhades/homebridge-bambu-lab). Version 2 was rewritten around the camera only. To thank the original author: [Buy Me A Coffee](https://www.buymeacoffee.com/trinityhades).
+
+Released under the [Apache-2.0 license](LICENSE).
