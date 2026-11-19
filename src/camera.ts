@@ -24,7 +24,7 @@ import { probeCapabilities } from './ffmpegCapabilities.js';
 import { FfmpegProcess, runForOutput } from './ffmpegProcess.js';
 import { PrinterPresence, rtspEndpoint } from './printerPresence.js';
 import { RtcpWatchdog } from './rtcpWatchdog.js';
-import { SnapshotCache } from './snapshotCache.js';
+import { CaptureCancelledError, SnapshotCache } from './snapshotCache.js';
 import { bindUdpSocket, closeSocket } from './udpSocket.js';
 
 /** From this width on, the printer's own H.264 is forwarded without re-encoding. */
@@ -92,7 +92,7 @@ export class BambuCamera implements CameraStreamingDelegate {
 
     this.snapshots = new SnapshotCache(
       join(storagePath, `bambu-${printer.serialNumber}-snapshot.jpg`),
-      (width, height) => this.captureFrame(width, height),
+      () => this.captureFrame(),
       () => this.sessions.size > 0,
     );
 
@@ -137,15 +137,14 @@ export class BambuCamera implements CameraStreamingDelegate {
     void probeCapabilities(printer.ffmpegPath);
   }
 
-  handleSnapshotRequest(request: SnapshotRequest, callback: SnapshotRequestCallback): void {
-    const width = request.width > 0 ? request.width : 1280;
-    const height = request.height > 0 ? request.height : 720;
-    this.presence.check()
+  handleSnapshotRequest(_request: SnapshotRequest, callback: SnapshotRequestCallback): void {
+    // The requested size is ignored: the cached frame is as large as HomeKit ever asks for.
+    void this.presence.check()
       .then((online) => {
         if (!online) {
           throw new Error('Printer is switched off.');
         }
-        return this.snapshots.get(width, height);
+        return this.snapshots.get();
       })
       .then(
         (image) => callback(undefined, image),
@@ -325,9 +324,9 @@ export class BambuCamera implements CameraStreamingDelegate {
     };
   }
 
-  private async captureFrame(width: number, height: number): Promise<Buffer> {
+  private async captureFrame(): Promise<Buffer> {
     const caps = await probeCapabilities(this.printer.ffmpegPath);
-    const run = runForOutput(this.printer.ffmpegPath, snapshotArgs(this.printer.streamUrl, caps, width, height), SNAPSHOT_TIMEOUT_MS);
+    const run = runForOutput(this.printer.ffmpegPath, snapshotArgs(this.printer.streamUrl, caps), SNAPSHOT_TIMEOUT_MS);
     let killedByUs = false;
     const kill = () => {
       killedByUs = true;
@@ -345,10 +344,11 @@ export class BambuCamera implements CameraStreamingDelegate {
       return image;
     } catch (error) {
       release();
-      if (!killedByUs) {
-        // The stream could not be read (LAN live view turned off, printer switched off).
-        void this.presence.recheck();
+      if (killedByUs) {
+        throw new CaptureCancelledError();
       }
+      // The stream could not be read (LAN live view turned off, printer switched off).
+      void this.presence.recheck();
       throw error;
     }
   }

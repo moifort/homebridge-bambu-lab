@@ -112,13 +112,13 @@ describe('transcodeArgs', () => {
 
 describe('snapshotArgs', () => {
   it('write one JPEG frame to stdout', () => {
-    const args = snapshotArgs(URL, MODERN, 1280, 720);
+    const args = snapshotArgs(URL, MODERN);
     assert.equal(valueAfter(args, '-frames:v'), '1');
     assert.equal(valueAfter(args, '-c:v'), 'mjpeg');
     assert.equal(args.at(-1), 'pipe:1');
   });
 
-  it('scale the frame to the requested size', () => {
-    assert.equal(valueAfter(snapshotArgs(URL, MODERN, 1280, 720), '-vf'), 'scale=1280:720:force_original_aspect_ratio=decrease');
+  it('capture at a fixed size, never upscaled beyond the source', () => {
+    assert.equal(valueAfter(snapshotArgs(URL, MODERN), '-vf'), 'scale=\'min(1920,iw)\':\'min(1080,ih)\':force_original_aspect_ratio=decrease');
   });
 });

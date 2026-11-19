@@ -6,18 +6,29 @@ const MAX_AGE_MS = 60_000;
 const RETRY_DELAY_MS = 30_000;
 const MAX_RETRY_DELAY_MS = 5 * 60_000;
 
-export type FrameCapture = (width: number, height: number) => Promise<Buffer>;
+/**
+ * Captures one frame. Always the same size, whatever HomeKit asks for: one cached JPEG answers
+ * both the small tiles and the full-screen requests, so it must never be smaller than either.
+ */
+export type FrameCapture = () => Promise<Buffer>;
+
+/** The plugin stopped the capture itself (a live view needed the printer's connection). */
+export class CaptureCancelledError extends Error {
+  constructor() {
+    super('Snapshot capture cancelled.');
+    this.name = 'CaptureCancelledError';
+  }
+}
 
 /**
  * Snapshots for the Home app tiles. The cached JPEG is answered at once (capturing a frame
  * takes longer than the 5 s HomeKit allows), one capture runs at a time, and failures back off.
+ * A capture cancelled by the plugin is not a failure and delays nothing.
  */
 export class SnapshotCache {
   private inFlight?: Promise<Buffer>;
   private failures = 0;
   private retryAt = 0;
-  private lastWidth = 1280;
-  private lastHeight = 720;
 
   constructor(
     private readonly filePath: string,
@@ -26,31 +37,29 @@ export class SnapshotCache {
     private readonly isStreaming: () => boolean,
   ) {}
 
-  async get(width: number, height: number): Promise<Buffer> {
-    this.lastWidth = width;
-    this.lastHeight = height;
+  async get(): Promise<Buffer> {
     const cached = await this.readCached();
     if (cached) {
       if (cached.ageMs >= MAX_AGE_MS) {
-        this.refresh(width, height).catch(() => {
+        this.refresh().catch(() => {
           // keep serving the cached snapshot
         });
       }
       return cached.image;
     }
-    return this.refresh(width, height);
+    return this.refresh();
   }
 
   /** The printer was switched back on: forget past failures and capture a fresh image. */
   refreshAfterReconnect(): void {
     this.failures = 0;
     this.retryAt = 0;
-    this.refresh(this.lastWidth, this.lastHeight).catch(() => {
+    this.refresh().catch(() => {
       // retried on the next request
     });
   }
 
-  private refresh(width: number, height: number): Promise<Buffer> {
+  private refresh(): Promise<Buffer> {
     if (this.inFlight) {
       return this.inFlight;
     }
@@ -61,13 +70,16 @@ export class SnapshotCache {
       return Promise.reject(new Error('Printer camera unreachable, retrying later.'));
     }
 
-    this.inFlight = this.capture(width, height)
+    this.inFlight = this.capture()
       .then(async (image) => {
         this.failures = 0;
         this.retryAt = 0;
         await this.writeCached(image);
         return image;
       }, (error: unknown) => {
+        if (error instanceof CaptureCancelledError) {
+          throw error;
+        }
         this.failures += 1;
         this.retryAt = Date.now() + Math.min(RETRY_DELAY_MS * 2 ** (this.failures - 1), MAX_RETRY_DELAY_MS);
         throw error;

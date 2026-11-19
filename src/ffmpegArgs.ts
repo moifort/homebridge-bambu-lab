@@ -111,13 +111,21 @@ export function transcodeArgs(url: string, caps: FfmpegCapabilities, video: Tran
   ];
 }
 
-/** One JPEG frame on stdout, decoded from the first keyframe received. */
-export function snapshotArgs(url: string, caps: FfmpegCapabilities, width: number, height: number): string[] {
+/** Snapshot size: the largest resolution HomeKit asks for. */
+const SNAPSHOT_MAX_WIDTH = 1920;
+const SNAPSHOT_MAX_HEIGHT = 1080;
+
+/**
+ * One JPEG frame on stdout, decoded from the first keyframe received. Always captured at the same
+ * size, as large as HomeKit ever asks for (smaller if the source is): the cached frame answers every
+ * request, from a small tile to full screen.
+ */
+export function snapshotArgs(url: string, caps: FfmpegCapabilities): string[] {
   return [
     ...inputArgs(url, caps),
     '-map', '0:v:0',
     '-frames:v', '1',
-    '-vf', `scale=${width}:${height}:force_original_aspect_ratio=decrease`,
+    '-vf', `scale='min(${SNAPSHOT_MAX_WIDTH},iw)':'min(${SNAPSHOT_MAX_HEIGHT},ih)':force_original_aspect_ratio=decrease`,
     '-f', 'image2',
     '-c:v', 'mjpeg',
     'pipe:1',
