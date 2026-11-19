@@ -3,6 +3,7 @@
   "pluginType": "platform",
   "singular": true,
   "strictValidation": false,
+  "headerDisplay": "Shows the camera of your Bambu Lab printers in the Home app. On each printer, turn on **LAN Mode Liveview** in the network settings, where the **IP address** and **LAN access code** are also shown. The **serial number** is in the device information. P1 and A1 printers have no RTSP stream: set a stream URL from an RTSP bridge under **Advanced**. [Setup guide](https://github.com/moifort/homebridge-bambu-lab#printer-setup)",
   "schema": {
     "type": "object",
     "required": ["name"],
@@ -20,18 +21,17 @@
         "default": [],
         "items": {
           "type": "object",
-          "required": ["name", "model", "ipAddress", "serialNumber", "lanAccessCode"],
           "additionalProperties": false,
           "properties": {
             "name": {
               "title": "Printer Name",
-              "description": "Printer name. The camera is named \"<name> Camera\" unless a camera name is set.",
+              "description": "The camera is named \"<name> Camera\" unless a camera name is set under Advanced.",
               "type": "string",
               "placeholder": "Office Printer"
             },
             "model": {
               "title": "Printer Model",
-              "description": "Printer model, shown in the accessory information in HomeKit.",
+              "description": "Shown in the accessory information in HomeKit. P1 and A1 printers have no RTSP stream: they need a camera stream URL from an RTSP bridge (Advanced).",
               "type": "string",
               "oneOf": [
                 { "title": "A1", "enum": ["A1"] },
@@ -39,6 +39,7 @@
                 { "title": "P1P", "enum": ["P1P"] },
                 { "title": "P1S", "enum": ["P1S"] },
                 { "title": "P2S", "enum": ["P2S"] },
+                { "title": "X1", "enum": ["X1"] },
                 { "title": "X1 Carbon", "enum": ["X1 Carbon"] },
                 { "title": "X1E", "enum": ["X1E"] },
                 { "title": "X2D", "enum": ["X2D"] },
@@ -51,40 +52,95 @@
             },
             "ipAddress": {
               "title": "Printer IP Address",
-              "description": "Local IP address of the printer.",
+              "description": "Shown in the printer's network settings. Reserve it in your router so it does not change. Not needed with a custom camera stream URL.",
               "type": "string",
-              "placeholder": "192.168.1.50"
+              "placeholder": "192.168.1.50",
+              "pattern": "^(\\[?[0-9A-Fa-f.]*:[0-9A-Fa-f.]*:[0-9A-Fa-f:.]*\\]?|[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)*\\.?)$"
             },
             "serialNumber": {
               "title": "Printer Serial Number",
-              "description": "Printer serial number. It identifies the camera in HomeKit: changing it creates a new camera.",
-              "type": "string"
+              "description": "In the printer's device information, or in Bambu Studio and Bambu Handy. It identifies the camera in HomeKit: changing it creates a new camera.",
+              "type": "string",
+              "placeholder": "01S00C123456789",
+              "pattern": "^[A-Za-z0-9]+$"
             },
             "lanAccessCode": {
               "title": "LAN Access Code",
-              "description": "LAN access code from the printer's network settings, used as the RTSP password.",
-              "type": "string"
+              "description": "Shown in the printer's network settings, next to LAN Mode Liveview. Not needed with a custom camera stream URL.",
+              "type": "string",
+              "placeholder": "12345678",
+              "pattern": "^[A-Za-z0-9]{8}$"
             },
             "cameraName": {
-              "title": "Camera Accessory Name",
-              "description": "Optional camera name in HomeKit.",
+              "title": "Camera Name",
+              "description": "Camera name in HomeKit, instead of \"<printer name> Camera\".",
               "type": "string"
             },
             "cameraRtspUrl": {
               "title": "Camera Stream URL",
-              "description": "Optional custom stream URL. Leave empty to use the printer's RTSPS stream on port 322.",
+              "description": "Only for printers without their own RTSP stream (P1, A1) behind an RTSP bridge, or a stream relayed elsewhere. Leave empty to use the printer's RTSPS stream on port 322.",
               "type": "string",
-              "placeholder": "rtsps://bblp:lanAccessCode@192.168.1.50:322/streaming/live/1"
+              "placeholder": "rtsp://192.168.1.60:8554/printer",
+              "pattern": "^rtsps?://\\S+$"
             },
             "ffmpegPath": {
               "title": "ffmpeg Path",
-              "description": "Path to the ffmpeg binary.",
+              "description": "Full path to the ffmpeg binary, if it is not in the PATH of the user running Homebridge.",
               "type": "string",
-              "default": "ffmpeg"
+              "placeholder": "ffmpeg"
             }
           }
         }
       }
     }
-  }
+  },
+  "layout": [
+    "name",
+    {
+      "key": "printers",
+      "type": "tabarray",
+      "title": "{{ value.name || 'New printer' }}",
+      "expandable": true,
+      "expanded": true,
+      "items": [
+        "printers[].name",
+        "printers[].model",
+        {
+          "key": "printers[].ipAddress",
+          "validationMessages": {
+            "pattern": "Enter the printer's IP address (for example 192.168.1.50) or host name, without http:// or a port."
+          }
+        },
+        {
+          "key": "printers[].serialNumber",
+          "validationMessages": {
+            "pattern": "The serial number has only letters and digits, as shown on the printer (for example 01S00C123456789)."
+          }
+        },
+        {
+          "key": "printers[].lanAccessCode",
+          "validationMessages": {
+            "pattern": "The LAN access code has 8 letters or digits, as shown in the printer's network settings."
+          }
+        },
+        {
+          "key": "printers[]",
+          "type": "section",
+          "title": "Advanced",
+          "expandable": true,
+          "expanded": false,
+          "items": [
+            "printers[].cameraName",
+            {
+              "key": "printers[].cameraRtspUrl",
+              "validationMessages": {
+                "pattern": "Enter an rtsp:// or rtsps:// URL."
+              }
+            },
+            "printers[].ffmpegPath"
+          ]
+        }
+      ]
+    }
+  ]
 }
