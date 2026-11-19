@@ -9,6 +9,8 @@ export interface FfmpegCapabilities {
   tlsVerifyOption: boolean;
   /** Socket I/O timeout option: `-timeout` (ffmpeg ≥ 5), `-stimeout` (ffmpeg 4), or none. */
   socketTimeoutOption?: '-timeout' | '-stimeout';
+  /** Set by `probeCapabilities` when the binary could not be run: why (`ENOENT`: not found). */
+  unavailable?: string;
 }
 
 export function parseRtspHelp(help: string): FfmpegCapabilities {
@@ -27,13 +29,17 @@ export function probeCapabilities(ffmpegPath: string): Promise<FfmpegCapabilitie
   let probe = probes.get(ffmpegPath);
   if (!probe) {
     probe = new Promise((resolve) => {
-      execFile(ffmpegPath, ['-hide_banner', '-h', 'demuxer=rtsp'], { timeout: 15_000 }, (_error, stdout) => {
+      execFile(ffmpegPath, ['-hide_banner', '-h', 'demuxer=rtsp'], { timeout: 15_000 }, (error, stdout) => {
         const help = typeof stdout === 'string' ? stdout : '';
-        if (!help.includes('-rtsp_transport')) {
-          // ffmpeg missing or too slow to answer: probe again on the next stream.
-          probes.delete(ffmpegPath);
+        if (help.includes('-rtsp_transport')) {
+          resolve(parseRtspHelp(help));
+          return;
         }
-        resolve(parseRtspHelp(help));
+        // ffmpeg missing or too slow to answer: probe again on the next stream.
+        probes.delete(ffmpegPath);
+        const code = (error as NodeJS.ErrnoException | null)?.code;
+        const reason = typeof code === 'string' ? code : error?.killed ? 'no answer within 15 s' : 'no RTSP support';
+        resolve({ ...parseRtspHelp(help), unavailable: reason });
       });
     });
     probes.set(ffmpegPath, probe);

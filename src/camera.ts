@@ -25,6 +25,7 @@ import { probeCapabilities } from './ffmpegCapabilities.js';
 import { FfmpegProcess, runForOutput } from './ffmpegProcess.js';
 import { PrinterPresence, rtspEndpoint } from './printerPresence.js';
 import { RtcpWatchdog } from './rtcpWatchdog.js';
+import { redactUrls } from './redact.js';
 import { CaptureCancelledError, SnapshotCache } from './snapshotCache.js';
 import { bindUdpSocket, closeSocket } from './udpSocket.js';
 
@@ -66,7 +67,7 @@ interface ActiveSession {
  *
  * A printer switched off is shown as "No Response" in the Home app: the streaming status
  * characteristics answer with a communication failure, snapshots and stream setups are refused
- * at once. HAP-NodeJS reports these errors at debug level only, so nothing reaches the log.
+ * at once. That is a normal state: it is only logged at debug level, like ffmpeg ending on its own.
  */
 export class BambuCamera implements CameraStreamingDelegate {
   private readonly controller: CameraController;
@@ -136,8 +137,14 @@ export class BambuCamera implements CameraStreamingDelegate {
     );
     this.presence.start();
 
-    // Warm the cache so the first stream does not wait for it.
-    void probeCapabilities(printer.ffmpegPath);
+    // Warm the cache so the first stream does not wait for it, and say once if ffmpeg is unusable.
+    void probeCapabilities(printer.ffmpegPath).then(({ unavailable }) => {
+      if (unavailable === 'ENOENT') {
+        log.error(`${printer.name}: ffmpeg not found at "${printer.ffmpegPath}". Install ffmpeg or set its path in the printer's advanced settings.`);
+      } else if (unavailable) {
+        log.error(`${printer.name}: ffmpeg at "${printer.ffmpegPath}" cannot be used (${unavailable}).`);
+      }
+    });
   }
 
   handleSnapshotRequest(_request: SnapshotRequest, callback: SnapshotRequestCallback): void {
@@ -245,13 +252,16 @@ export class BambuCamera implements CameraStreamingDelegate {
       ? passthroughArgs(this.printer.streamUrl, caps, target)
       : transcodeArgs(this.printer.streamUrl, caps, this.transcodeOptions(request), target);
 
-    const ffmpeg = new FfmpegProcess(this.printer.ffmpegPath, args, () => {
+    const mode = request.video.width >= PASSTHROUGH_MIN_WIDTH ? 'forwarded' : `re-encoded to ${request.video.width}x${request.video.height}`;
+    this.log.debug(`${this.printer.name}: live view started (${mode}).`);
+    const ffmpeg = new FfmpegProcess(this.printer.ffmpegPath, args, (reason) => {
       // ffmpeg ended on its own (printer switched off, stream dropped, extra connection
       // refused): close this session in HomeKit, then check whether the printer is still
       // there and still serves its stream. While other sessions run, they prove it is on and
       // no probe is made.
       // (A session stopped from our side never gets here: `stop()` silences this callback.)
       if (this.sessions.has(sessionId)) {
+        this.log.debug(`${this.printer.name}: live view ended unexpectedly: ${redactUrls(reason)}`);
         this.forceStop(sessionId);
         void this.presence.recheck();
       }
@@ -261,6 +271,7 @@ export class BambuCamera implements CameraStreamingDelegate {
     const silenceMs = Math.max(MIN_RTCP_SILENCE_MS, request.video.rtcp_interval * 10 * 1000);
     const watchdog = new RtcpWatchdog(Math.max(FIRST_RTCP_REPORT_MS, silenceMs), silenceMs, () => {
       if (this.sessions.get(sessionId)?.ffmpeg === ffmpeg) {
+        this.log.debug(`${this.printer.name}: live view closed, the viewer stopped sending RTCP reports.`);
         this.forceStop(sessionId);
       }
     });
@@ -281,6 +292,7 @@ export class BambuCamera implements CameraStreamingDelegate {
   private handlePresenceChange(online: boolean): void {
     const wasOff = !this.printerOn;
     this.printerOn = online;
+    this.log.debug(`${this.printer.name}: printer ${online ? 'on, camera stream available' : 'off or camera stream unavailable'}.`);
     this.applyReachability();
     if (online && wasOff) {
       this.snapshots.refreshAfterReconnect();
@@ -351,6 +363,7 @@ export class BambuCamera implements CameraStreamingDelegate {
         throw new CaptureCancelledError();
       }
       // The stream could not be read (LAN live view turned off, printer switched off).
+      this.log.debug(`${this.printer.name}: snapshot failed: ${redactUrls(error instanceof Error ? error.message : String(error))}`);
       void this.presence.recheck();
       throw error;
     }

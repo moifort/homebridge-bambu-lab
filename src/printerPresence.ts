@@ -46,8 +46,8 @@ export function tcpPortState(host: string, port: number): Promise<PortState> {
 
 /**
  * Knows whether the printer is powered on with its camera stream available. A printer switched
- * off at the plug is a normal state, not an error: no ffmpeg is started for it and nothing is
- * logged.
+ * off at the plug is a normal state, not an error: no ffmpeg is started for it and it is only
+ * logged at debug level.
  *
  * The stream port is asked as rarely as possible. Every connection accepted by the printer's
  * RTSP server slows it down until the printer is restarted, even a connection closed at once:

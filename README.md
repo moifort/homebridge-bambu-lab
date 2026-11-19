@@ -22,7 +22,7 @@ Homebridge plugin that exposes the camera of one or more **Bambu Lab printers** 
 - **Several viewers at once**: up to three devices can watch the live view at the same time, as far as the printer accepts the extra RTSP connections (see below).
 - **Snapshots** for the Home app tiles: the last snapshot is returned instantly and refreshed in the background when older than 60 seconds. While a live view is open, the cached snapshot is served instead of opening one more connection to the printer.
 - **Printer switched off**: the camera shows "No Response" in the Home app, and comes back by itself when the printer is switched on again (see below).
-- Silent: the plugin writes nothing to the Homebridge log.
+- Quiet in normal operation: a printer switched off is not an error. The log only shows configuration problems (a printer skipped and why, ffmpeg not found); details on presence changes and ffmpeg failures are logged at debug level.
 
 ## Requirements
 
@@ -96,7 +96,7 @@ Options from version 1.x (MQTT, light, print switch, speed, HKSV, motion detecti
 
 ## Printer switched off
 
-Switching the printer off at the plug is a normal state, not an error: nothing is logged and no ffmpeg is started for it.
+Switching the printer off at the plug is a normal state, not an error: it is only logged at debug level and no ffmpeg is started for it.
 
 - While the printer is off, the Home app shows "No Response" instead of an old picture. Snapshot and stream requests are refused at once.
 - When the printer is back, the camera becomes available again within 30 seconds (sooner if the Home app is open) and a fresh snapshot is captured, without restarting Homebridge.
@@ -111,7 +111,7 @@ The forwarded stream uses almost no CPU: ffmpeg only decrypts, repackages and en
 
 ## Troubleshooting
 
-The plugin writes nothing to the Homebridge log, so check these points by hand.
+The plugin is quiet in normal operation. At startup it logs a warning for each printer it skips, with the reason, and an error if ffmpeg cannot be found. For more detail, run Homebridge in debug mode: in the Homebridge UI, **Settings** → **Homebridge Debug Mode** (`-D`), or for a child bridge, its **Bridge Settings** → **Debug Mode**. Restart, reproduce the problem, and the log shows when the printer is seen on or off, each live view started or ended, and why ffmpeg stopped (its last error lines, with the access code hidden).
 
 **The camera shows "No Response".** The plugin cannot open the printer's stream port.
 
