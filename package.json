@@ -1,6 +1,6 @@
 {
   "name": "@moifort/homebridge-bambu-lab",
-  "displayName": "Homebridge Bambu Plugin",
+  "displayName": "Bambu Lab Camera",
   "type": "module",
   "version": "2.1.1",
   "private": false,
