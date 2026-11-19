@@ -130,3 +130,6 @@ dist
 
 # Claude Code session files
 .claude/
+
+# Compiled tests
+.test-dist

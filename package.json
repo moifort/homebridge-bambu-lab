@@ -31,12 +31,13 @@
     "homebridge": "^1.8.0 || ^2.0.0-beta.0"
   },
   "scripts": {
-    "build": "rimraf ./dist && tsc",
+    "build": "rimraf ./dist && tsc -p tsconfig.build.json",
     "lint": "eslint . --max-warnings=0",
-    "prepublishOnly": "npm run lint && npm run build",
+    "prepublishOnly": "npm run lint && npm test && npm run build",
     "release": "npm version patch && git push --follow-tags",
     "dev": "npm run build && npm run lint && sudo hb-service restart",
-    "watch": "npm run build && npm link && nodemon"
+    "watch": "npm run build && npm link && nodemon",
+    "test": "rimraf ./.test-dist && tsc && node --test .test-dist/test/*.test.js"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",
