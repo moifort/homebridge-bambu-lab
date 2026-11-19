@@ -154,22 +154,40 @@ export class BambuCamera implements CameraStreamingDelegate {
   }
 
   prepareStream(request: PrepareStreamRequest, callback: PrepareStreamCallback): void {
-    this.presence.check().then((online) => {
-      if (online) {
+    this.presence.check()
+      .then((online) => {
+        if (!online) {
+          throw new Error('Printer is switched off.');
+        }
         this.prepareSession(request, callback);
-      } else {
-        callback(new Error('Printer is switched off.'));
-      }
-    });
+      })
+      .catch((error: Error) => callback(error));
   }
 
   private prepareSession(request: PrepareStreamRequest, callback: PrepareStreamCallback): void {
     const socket = createSocket(request.addressVersion === 'ipv6' ? 'udp6' : 'udp4');
-    socket.once('error', (error) => {
-      socket.close();
-      callback(error);
+    let bound = false;
+    socket.on('error', (error) => {
+      if (!bound) {
+        // Bind failed: HomeKit has not been answered yet, answer once.
+        bound = true;
+        closeSocket(socket);
+        callback(error);
+        return;
+      }
+      // Later socket error: close only the session that owns this socket.
+      const sessionId = this.prepared.get(request.sessionID)?.socket === socket
+        || this.sessions.get(request.sessionID)?.socket === socket ? request.sessionID : undefined;
+      if (sessionId && this.sessions.has(sessionId)) {
+        this.forceStop(sessionId);
+      } else if (sessionId) {
+        this.stopSession(sessionId);
+      } else {
+        closeSocket(socket);
+      }
     });
     socket.bind(0, () => {
+      bound = true;
       const ssrc = randomInt(1, 0x7fffffff);
       this.prepared.set(request.sessionID, {
         socket,
