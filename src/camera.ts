@@ -1,4 +1,4 @@
-import { createSocket, type Socket } from 'node:dgram';
+import type { Socket } from 'node:dgram';
 import { randomInt } from 'node:crypto';
 import { join } from 'node:path';
 
@@ -10,6 +10,7 @@ import type {
   PlatformAccessory,
   PrepareStreamCallback,
   PrepareStreamRequest,
+  PrepareStreamResponse,
   SnapshotRequest,
   SnapshotRequestCallback,
   StartStreamRequest,
@@ -22,21 +23,20 @@ import { passthroughArgs, snapshotArgs, transcodeArgs, type SrtpTarget, type Tra
 import { probeCapabilities } from './ffmpegCapabilities.js';
 import { FfmpegProcess, runForOutput } from './ffmpegProcess.js';
 import { PrinterPresence, rtspEndpoint } from './printerPresence.js';
+import { RtcpWatchdog } from './rtcpWatchdog.js';
 import { SnapshotCache } from './snapshotCache.js';
-
-function closeSocket(socket: Socket): void {
-  try {
-    socket.close();
-  } catch {
-    // already closed
-  }
-}
+import { bindUdpSocket, closeSocket } from './udpSocket.js';
 
 /** From this width on, the printer's own H.264 is forwarded without re-encoding. */
 const PASSTHROUGH_MIN_WIDTH = 1280;
 const SNAPSHOT_TIMEOUT_MS = 10_000;
 /** A session whose viewer stopped sending RTCP reports for this long is considered gone. */
 const MIN_RTCP_SILENCE_MS = 5_000;
+/**
+ * Delay for the first RTCP report. The viewer only reports once video reaches it, after the
+ * printer's first keyframe, which a printer slowed down by many RTSP connections took 16 s to send.
+ */
+const FIRST_RTCP_REPORT_MS = 30_000;
 /**
  * Live views that can run at the same time, each with its own ffmpeg and its own RTSP connection
  * to the printer. Three covers a Mac, an iPhone and a third screen (iPad, Apple TV). The limit
@@ -55,7 +55,7 @@ interface ActiveSession {
   id: string;
   socket: Socket;
   ffmpeg: FfmpegProcess;
-  watchdog?: NodeJS.Timeout;
+  watchdog: RtcpWatchdog;
 }
 
 /**
@@ -154,59 +154,41 @@ export class BambuCamera implements CameraStreamingDelegate {
   }
 
   prepareStream(request: PrepareStreamRequest, callback: PrepareStreamCallback): void {
-    this.presence.check()
+    void this.presence.check()
       .then((online) => {
         if (!online) {
           throw new Error('Printer is switched off.');
         }
-        this.prepareSession(request, callback);
+        return this.prepareSession(request);
       })
-      .catch((error: Error) => callback(error));
+      .then((response) => callback(undefined, response), (error: Error) => callback(error));
   }
 
-  private prepareSession(request: PrepareStreamRequest, callback: PrepareStreamCallback): void {
-    const socket = createSocket(request.addressVersion === 'ipv6' ? 'udp6' : 'udp4');
-    let bound = false;
-    socket.on('error', (error) => {
-      if (!bound) {
-        // Bind failed: HomeKit has not been answered yet, answer once.
-        bound = true;
-        closeSocket(socket);
-        callback(error);
-        return;
-      }
-      // Later socket error: close only the session that owns this socket.
-      const sessionId = this.prepared.get(request.sessionID)?.socket === socket
-        || this.sessions.get(request.sessionID)?.socket === socket ? request.sessionID : undefined;
-      if (sessionId && this.sessions.has(sessionId)) {
-        this.forceStop(sessionId);
-      } else if (sessionId) {
-        this.stopSession(sessionId);
-      } else {
-        closeSocket(socket);
-      }
+  private async prepareSession(request: PrepareStreamRequest): Promise<PrepareStreamResponse> {
+    const sessionId = request.sessionID;
+    const socket = await bindUdpSocket(
+      request.addressVersion === 'ipv6' ? 'udp6' : 'udp4',
+      // The socket broke after HomeKit was answered: end this session only.
+      () => this.sessions.has(sessionId) ? this.forceStop(sessionId) : this.stopSession(sessionId),
+    );
+    const ssrc = randomInt(1, 0x7fffffff);
+    this.prepared.set(sessionId, {
+      socket,
+      target: {
+        address: request.targetAddress,
+        port: request.video.port,
+        ssrc,
+        srtpParams: Buffer.concat([request.video.srtp_key, request.video.srtp_salt]).toString('base64'),
+      },
     });
-    socket.bind(0, () => {
-      bound = true;
-      const ssrc = randomInt(1, 0x7fffffff);
-      this.prepared.set(request.sessionID, {
-        socket,
-        target: {
-          address: request.targetAddress,
-          port: request.video.port,
-          ssrc,
-          srtpParams: Buffer.concat([request.video.srtp_key, request.video.srtp_salt]).toString('base64'),
-        },
-      });
-      callback(undefined, {
-        video: {
-          port: socket.address().port,
-          ssrc,
-          srtp_key: request.video.srtp_key,
-          srtp_salt: request.video.srtp_salt,
-        },
-      });
-    });
+    return {
+      video: {
+        port: socket.address().port,
+        ssrc,
+        srtp_key: request.video.srtp_key,
+        srtp_salt: request.video.srtp_salt,
+      },
+    };
   }
 
   handleStreamRequest(request: StreamingRequest, callback: StreamRequestCallback): void {
@@ -229,7 +211,7 @@ export class BambuCamera implements CameraStreamingDelegate {
     this.presence.stop();
     this.killSnapshot?.();
     for (const session of this.sessions.values()) {
-      clearTimeout(session.watchdog);
+      session.watchdog.stop();
       session.ffmpeg.kill();
       closeSocket(session.socket);
     }
@@ -272,23 +254,18 @@ export class BambuCamera implements CameraStreamingDelegate {
         void this.presence.recheck();
       }
     });
-    const session: ActiveSession = { id: sessionId, socket: prepared.socket, ffmpeg };
-    this.sessions.set(sessionId, session);
-
-    // HomeKit sends RTCP reports while the viewer is watching. If they stop without a STOP
-    // request (app killed, network lost), release the printer's RTSP connection.
-    // Armed at once, so a viewer gone before its first report is released too.
+    // HomeKit sends RTCP reports while the viewer is watching. If they stop, or never come,
+    // without a STOP request (app killed, network lost), release the printer's RTSP connection.
     const silenceMs = Math.max(MIN_RTCP_SILENCE_MS, request.video.rtcp_interval * 10 * 1000);
-    const armWatchdog = () => {
-      clearTimeout(session.watchdog);
-      session.watchdog = setTimeout(() => {
-        if (this.sessions.get(sessionId) === session) {
-          this.forceStop(sessionId);
-        }
-      }, silenceMs);
-    };
-    armWatchdog();
-    prepared.socket.on('message', armWatchdog);
+    const watchdog = new RtcpWatchdog(Math.max(FIRST_RTCP_REPORT_MS, silenceMs), silenceMs, () => {
+      if (this.sessions.get(sessionId)?.ffmpeg === ffmpeg) {
+        this.forceStop(sessionId);
+      }
+    });
+    const session: ActiveSession = { id: sessionId, socket: prepared.socket, ffmpeg, watchdog };
+    this.sessions.set(sessionId, session);
+    prepared.socket.on('message', () => watchdog.feed());
+    watchdog.start();
   }
 
   /** Ends a session from our side and closes it in HomeKit. */
@@ -329,7 +306,7 @@ export class BambuCamera implements CameraStreamingDelegate {
     const session = this.sessions.get(sessionId);
     if (session) {
       this.sessions.delete(sessionId);
-      clearTimeout(session.watchdog);
+      session.watchdog.stop();
       session.ffmpeg.stop();
       closeSocket(session.socket);
     }
