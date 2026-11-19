@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-11-19
+
 ### Added
 
 - Configuration problems are now reported in the Homebridge log, once at startup: a warning for each printer that is skipped, with the reason (missing serial number, IP address or access code, invalid address or stream URL, serial number used twice), and an error when ffmpeg cannot be found or run. The access code and stream URLs are never logged.
